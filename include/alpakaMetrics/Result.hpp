@@ -40,6 +40,7 @@ namespace alpakaMetrics
         watts,
         hertz,
         ratio,
+        bytes,
         providerDefined
     };
     using MetricValue = std::variant<std::int64_t, std::uint64_t, double>;
@@ -53,6 +54,7 @@ namespace alpakaMetrics
         MetricUnit unit{MetricUnit::providerDefined};
         MetricScope scope{MetricScope::providerDefined};
         std::string nativeUnit;
+        double nativeToValueScale{1.0};
     };
 
     struct MetricResult

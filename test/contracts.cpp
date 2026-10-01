@@ -5,6 +5,7 @@
 #include <chrono>
 #include <future>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <thread>
 
@@ -79,6 +80,32 @@ namespace
         check(host.getResults().measurementId == next.measurementId, "Latest region mismatch");
         expectThrow<std::invalid_argument>(
             [] { HostSideInstrumentation invalid{Config{.metrics = {metric::elapsedTime, metric::elapsedTime}}}; });
+    }
+
+    void testMetricMappings()
+    {
+        using namespace alpakaMetrics;
+        auto mapped = [](MetricUnit unit, double scale)
+        { return metric::map(metric::energy, metric::native("invalid_energy_event", unit, scale)); };
+        expectThrow<std::invalid_argument>(
+            [&] { HostSideInstrumentation host{Config{.metrics = {mapped(MetricUnit::joules, 0.0)}}}; });
+        expectThrow<std::invalid_argument>(
+            [&]
+            {
+                HostSideInstrumentation host{
+                    Config{.metrics = {mapped(MetricUnit::joules, std::numeric_limits<double>::infinity())}}};
+            });
+        expectThrow<std::invalid_argument>(
+            [&] { HostSideInstrumentation host{Config{.metrics = {mapped(MetricUnit::hertz, 1.0)}}}; });
+        expectThrow<std::invalid_argument>(
+            [&] { HostSideInstrumentation host{Config{.metrics = {mapped(MetricUnit::providerDefined, 1.0)}}}; });
+        HostSideInstrumentation host{Config{.metrics = {mapped(MetricUnit::joules, 1.0e-9)}}};
+        host.begin();
+        auto result = host.end();
+        check(!result.getMetric("energy").isAvailable(), "Missing mapped event reported available");
+        check(
+            result.getMetric("energy").descriptor.unit == MetricUnit::joules,
+            "Missing mapped event lost the requested unit");
     }
 
     void testAdditionalCounters()
@@ -258,6 +285,7 @@ int main()
     {
         testHostRegions();
         testAdditionalCounters();
+        testMetricMappings();
         testQueue(false);
         testQueue(true);
         testQueueDelay();

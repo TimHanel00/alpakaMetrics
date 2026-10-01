@@ -144,9 +144,8 @@ hardware execution has not yet been validated.
 Semantic CPU mappings currently include cycles, instructions, floating-point
 operations and L2/L3 total cache misses through their PAPI presets. Always inspect
 the returned native definition; cache-event meaning can vary with hardware.
-The occupancy, energy and frequency tags currently return `unsupported` until a
-semantic provider mapping exists. Native energy/frequency events can be requested
-through PAPI when their components are configured and accessible.
+The occupancy, energy, frequency and transferred-byte tags require an explicit
+native mapping. Without one, they return `unsupported`.
 
 Additional CPU tags (availability depends on the hardware and PAPI definitions):
 
@@ -166,6 +165,39 @@ not transferred bytes, and cannot be silently converted into roofline traffic.
 Preset definitions are documented in
 [PAPI's event definitions](https://github.com/icl-utk-edu/papi/blob/72a3124d048dc5c89eb3f00c9f2866f4492b5383/src/papiStdEventDefs.h).
 
+### Native mappings and units
+
+Bind a semantic tag to an event from a configured PAPI component:
+
+```cpp
+alpakaMetrics::Config config{.metrics = {
+    alpakaMetrics::metric::elapsedTime,
+    alpakaMetrics::metric::map(
+        alpakaMetrics::metric::energy,
+        alpakaMetrics::metric::native(
+            "rapl:::PACKAGE_ENERGY:PACKAGE0",
+            alpakaMetrics::MetricUnit::joules, 1.0e-9))}};
+auto hostSession = alpakaMetrics::HostSideInstrumentation(config);
+```
+
+This example selects package 0 explicitly. The pinned RAPL component reports
+its package-energy event in nJ, so the declared conversion produces joules.
+It requires a build with the `rapl` component and permission to collect it.
+See [PAPI's RAPL implementation](https://github.com/icl-utk-edu/papi/blob/72a3124d048dc5c89eb3f00c9f2866f4492b5383/src/components/rapl/linux-rapl.c).
+
+Similarly, map `coreFrequency` to hertz, `achievedOccupancy` to a ratio, or
+`transferredBytes` to bytes. The selected event must actually provide that
+quantity for the requested region. An instantaneous frequency sample is not an
+average frequency; mapping cannot change the provider's sampling semantics.
+Device/context events remain rejected for CPU queue worker collection. A host
+region preserves their provider scope and does not claim per-kernel attribution.
+
+Conversions require a positive finite scale. Results retain native name, native
+unit, provider scope and `nativeToValueScale`. Unscaled integer values retain
+their integer representation; scaled values become doubles. Missing events and
+conversion overflow have no value. The software-counter test verifies conversion
+through real PAPI; it does not constitute a hardware-energy measurement.
+
 ```cpp
 auto available = alpakaMetrics::HostSideInstrumentation::getAvailableMetrics();
 // Discovery describes supported event definitions, not guaranteed collectibility.
@@ -174,7 +206,7 @@ config.metrics = {alpakaMetrics::metric::native("PAPI_TOT_INS")};
 
 Every result includes status, provider, native name, definition, unit, scope and
 diagnostic. Native units are preserved in `nativeUnit`; no unverified energy or
-frequency unit conversion is performed. Values retain signed/unsigned 64-bit or
+frequency unit conversion is performed unless explicitly declared. Values retain signed/unsigned 64-bit or
 floating-point representations. `asDouble()` is a convenience conversion and
 may lose integer precision. Unsupported metrics have no value, and converting
 them throws. Collection does not automatically replay kernels or multiplex

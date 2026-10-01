@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <atomic>
 #include <bit>
+#include <cmath>
 #include <mutex>
 #include <thread>
 
@@ -24,6 +25,7 @@ namespace alpakaMetrics::internal
             bool running{};
             std::vector<std::size_t> resultIndices;
             std::vector<int> dataTypes;
+            std::vector<double> scales;
         };
 
         std::vector<Group> groups;
@@ -165,6 +167,11 @@ namespace alpakaMetrics::internal
             }
             int const component = PAPI_get_event_component(code);
             result.descriptor = descriptorFor(request.name, info, component);
+            if(request.name != request.papiName)
+                result.descriptor.unit = MetricUnit::count;
+            if(request.unit != MetricUnit::providerDefined)
+                result.descriptor.unit = request.unit;
+            result.descriptor.nativeToValueScale = request.scale;
             if(config.counterScope == MetricScope::callingThread
                && result.descriptor.scope != MetricScope::callingThread)
             {
@@ -172,8 +179,6 @@ namespace alpakaMetrics::internal
                 result.diagnostic = "Queue worker collection accepts only calling-thread counters";
                 continue;
             }
-            if(request.name != request.papiName)
-                result.descriptor.unit = MetricUnit::count;
             auto group = std::find_if(
                 m_impl->groups.begin(),
                 m_impl->groups.end(),
@@ -194,6 +199,7 @@ namespace alpakaMetrics::internal
             {
                 group->resultIndices.push_back(index - 1u);
                 group->dataTypes.push_back(info.data_type);
+                group->scales.push_back(request.scale);
                 result.status = MetricStatus::available;
                 result.diagnostic.clear();
             }
@@ -273,6 +279,18 @@ namespace alpakaMetrics::internal
                     result.value = std::bit_cast<std::uint64_t>(values[i]);
                 else
                     result.value = static_cast<std::int64_t>(values[i]);
+                if(result.isAvailable() && group.scales[i] != 1.0)
+                {
+                    auto const scaled = result.asDouble() * group.scales[i];
+                    if(std::isfinite(scaled))
+                        result.value = scaled;
+                    else
+                    {
+                        result.status = MetricStatus::collectionFailed;
+                        result.value.reset();
+                        result.diagnostic = "Native metric conversion overflowed";
+                    }
+                }
             }
         }
 #endif

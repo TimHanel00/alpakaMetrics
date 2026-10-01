@@ -4,6 +4,7 @@
 #include "alpakaMetrics/internal/Papi.hpp"
 
 #include <atomic>
+#include <cmath>
 #include <mutex>
 #include <thread>
 #include <unordered_set>
@@ -22,13 +23,47 @@ namespace alpakaMetrics::internal
             throw std::invalid_argument{"Counter scope must be providerDefined or callingThread"};
         std::unordered_set<std::string> names;
         for(auto const& request : config.metrics)
+        {
             if(request.name.empty() || !names.insert(request.name).second)
                 throw std::invalid_argument{"Metric names must be non-empty and unique"};
+            if(!std::isfinite(request.scale) || request.scale <= 0.0)
+                throw std::invalid_argument{"Metric conversion scale must be finite and positive"};
+            if(request.name == "elapsed_time" && (!request.papiName.empty() || request.scale != 1.0))
+                throw std::invalid_argument{"Elapsed time cannot be rebound to a counter"};
+            if(!request.papiName.empty())
+            {
+                auto expected = MetricUnit::count;
+                if(request.name == "energy")
+                    expected = MetricUnit::joules;
+                else if(request.name == "core_frequency")
+                    expected = MetricUnit::hertz;
+                else if(request.name == "achieved_occupancy")
+                    expected = MetricUnit::ratio;
+                else if(request.name == "transferred_bytes")
+                    expected = MetricUnit::bytes;
+                if(request.name != request.papiName && request.unit != MetricUnit::providerDefined
+                   && request.unit != expected)
+                    throw std::invalid_argument{"Native mapping unit does not match the semantic metric"};
+                if(expected != MetricUnit::count && request.unit == MetricUnit::providerDefined)
+                    throw std::invalid_argument{"Native mapping requires an explicit semantic unit"};
+            }
+        }
     }
 
     MetricResult makeUnavailable(MetricRequest const& request, MetricStatus status, std::string diagnostic)
     {
-        return {{request.name, request.papiName, {}, "none"}, status, {}, std::move(diagnostic)};
+        return {
+            {request.name,
+             request.papiName,
+             {},
+             "none",
+             request.unit,
+             MetricScope::providerDefined,
+             {},
+             request.scale},
+            status,
+            {},
+            std::move(diagnostic)};
     }
 
     class HostInstrumentation

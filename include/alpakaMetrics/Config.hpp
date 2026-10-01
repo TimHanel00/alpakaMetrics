@@ -79,6 +79,10 @@ namespace alpakaMetrics
         {
         };
 
+        struct TransferredBytes
+        {
+        };
+
         inline constexpr ElapsedTime elapsedTime{};
         inline constexpr Cycles cycles{};
         inline constexpr Instructions instructions{};
@@ -96,15 +100,19 @@ namespace alpakaMetrics
         inline constexpr AchievedOccupancy achievedOccupancy{};
         inline constexpr Energy energy{};
         inline constexpr CoreFrequency coreFrequency{};
+        inline constexpr TransferredBytes transferredBytes{};
 
         struct Native
         {
             std::string name;
+            MetricUnit unit{MetricUnit::providerDefined};
+            double scale{1.0};
         };
 
-        inline auto native(std::string name) -> Native
+        inline auto native(std::string name, MetricUnit unit = MetricUnit::providerDefined, double scale = 1.0)
+            -> Native
         {
-            return Native{std::move(name)};
+            return Native{std::move(name), unit, scale};
         }
     } // namespace metric
 
@@ -112,6 +120,8 @@ namespace alpakaMetrics
     {
         std::string name;
         std::string papiName;
+        MetricUnit unit{MetricUnit::providerDefined};
+        double scale{1.0};
 
         MetricRequest(metric::ElapsedTime) : name{"elapsed_time"}
         {
@@ -181,10 +191,30 @@ namespace alpakaMetrics
         {
         }
 
-        MetricRequest(metric::Native request) : name{request.name}, papiName{std::move(request.name)}
+        MetricRequest(metric::TransferredBytes) : name{"transferred_bytes"}
+        {
+        }
+
+        MetricRequest(metric::Native request)
+            : name{request.name}
+            , papiName{std::move(request.name)}
+            , unit{request.unit}
+            , scale{request.scale}
         {
         }
     };
+
+    namespace metric
+    {
+        /** Bind a semantic metric to a provider event, with an explicit unit and conversion. */
+        inline MetricRequest map(MetricRequest request, Native source)
+        {
+            request.papiName = std::move(source.name);
+            request.unit = source.unit;
+            request.scale = source.scale;
+            return request;
+        }
+    } // namespace metric
 
     /** Collection is single-pass. Unavailable counters remain explicit result entries. */
     struct Config
