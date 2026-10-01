@@ -43,7 +43,12 @@ set_target_properties(
     PROPERTIES INTERFACE_LINK_LIBRARIES alpaka::alpaka
 )
 
-add_library(alpakaMetrics src/HostSideInstrumentation.cpp src/Papi.cpp)
+add_library(
+    alpakaMetrics
+    src/HostSideInstrumentation.cpp
+    src/Papi.cpp
+    src/Roofline.cpp
+)
 add_library(alpakaMetrics::alpakaMetrics ALIAS alpakaMetrics)
 target_compile_features(alpakaMetrics PUBLIC cxx_std_20)
 target_include_directories(

@@ -1,18 +1,14 @@
 # alpakaMetrics
-
-A standalone, optional instrumentation adapter for Alpaka 3. It uses Alpaka-style
-handles, semantic concepts, named metric tags, and `internal::*::Op` dispatch.
-Neither Alpaka nor alpaka3-tuner depends on this repository. This repository is
-currently local and unpublished.
+This repository adds support native runtime metrics support for alpaka 3 (https://github.com/alpaka-group/alpaka3) as an optional instrumentation adapter.
+The goal is to enhance profiling utilities across Vendor APIs. Most utilities and metrics are enabled by PAPI, which remains a optional but important dependency of this repository. 
+PAPI has support for CPU, CUDA and HIP specific hardware counters and is therefore a natural fit, that is compatible with alpakas generic approach on supporting multiple vendor APIs.
 
 ## Build
 
 Alpaka and PAPI sources are downloaded with CMake FetchContent. Both revisions
 are pinned. **PAPI is optional and ON by default.** The initial bundled PAPI
-build requires Linux. System PAPI can be supplied separately. PAPI uses Autotools;
-an ExternalProject builds a private source copy inside the build directory and
-stages its libraries without running `ldconfig` or installing system packages.
-The initial bundled configuration enables PAPI's default platform components.
+build requires Linux and Autotools. System PAPI can be supplied separately.
+The bundled configuration enables PAPI's default platform components.
 GPU and energy components require their corresponding SDKs and can be selected
 explicitly.
 
@@ -41,13 +37,11 @@ Use a separate build directory when changing component sets. Components such as
 `cuda`, `rocp_sdk`, and `intel_gpu` need vendor libraries and their PAPI-specific
 environment configuration. Enabling a component does not guarantee that the
 driver, permissions, hardware, or requested counter combination permits
-collection. PAPI 7.2.0 is the initial pinned version; the revision and configure
-arguments are overridable for newer vendor-toolkit requirements.
+collection.
 
 For a local Alpaka checkout, pass
 `-DFETCHCONTENT_SOURCE_DIR_ALPAKA3=/absolute/path/to/alpaka`. A previously
-provided `alpaka::alpaka` target takes precedence. Source overrides are never
-configured or built in place by the PAPI integration.
+provided `alpaka::alpaka` target takes precedence.
 
 ## Use from another CMake project
 
@@ -85,14 +79,12 @@ auto result = measurement.getResults(); // waits for this measurement
 ```
 
 The kernel is submitted once. `getResults()` and `alpaka::onHost::wait(measurement)`
-wait for completion. Each measurement has a stable ID, so retaining a handle
-keeps the result associated with its own launch even after later submissions.
-Synchronization events are forwarded without creating extra measurements.
+wait for completion. Retaining a handle keeps its result associated with its launch.
 `queue.enqueueHostFn(task)` measures the host function on its executing thread
 and propagates task exceptions through the measurement handle.
 
-Queue copies share the underlying queue, submission lock, and measurement
-history. `getMeasurements()` returns retained handles. Call `clearMeasurements()`
+Queue copies share the underlying queue and measurement history.
+`getMeasurements()` returns retained handles. Call `clearMeasurements()`
 periodically during long tuning runs; externally retained handles remain valid.
 The underlying queue must remain usable until pending work completes.
 
@@ -120,10 +112,8 @@ kernels. CPU thread counters describe the calling thread, not the queue worker
 or an OpenMP team. They may include CPU time spent in the wait implementation.
 Native PAPI metrics retain their own component-defined scope and units.
 
-`begin()`/`end()` may be repeated. Ending an inactive region, beginning an active
-one, or ending on another thread throws. An active session must also be destroyed
-on the thread that began it. Overlapping regions can conflict over limited
-counter resources; those conflicts are reported per metric.
+Begin, end, and destroy an active session on the same thread. Overlapping regions
+can compete for counter resources; conflicts are reported per metric.
 
 ## Implemented measurement semantics
 
@@ -147,22 +137,10 @@ the returned native definition; cache-event meaning can vary with hardware.
 The occupancy, energy, frequency and transferred-byte tags require an explicit
 native mapping. Without one, they return `unsupported`.
 
-Additional CPU tags (availability depends on the hardware and PAPI definitions):
-
-| Tag | PAPI preset | Definition |
-| --- | --- | --- |
-| `l1DataMisses` | `PAPI_L1_DCM` | L1 data-cache misses |
-| `l2Accesses` | `PAPI_L2_TCA` | Total L2 cache accesses |
-| `l3Accesses` | `PAPI_L3_TCA` | Total L3 cache accesses |
-| `branchInstructions` | `PAPI_BR_INS` | Executed branch instructions |
-| `branchMispredictions` | `PAPI_BR_MSP` | Mispredicted conditional branches |
-| `loadInstructions` | `PAPI_LD_INS` | Executed load instructions |
-| `storeInstructions` | `PAPI_SR_INS` | Executed store instructions |
-| `resourceStallCycles` | `PAPI_RES_STL` | Processor cycles stalled on a resource |
-
-Resource stalls do not identify L2/L3 stalls. Cache accesses and misses are counts,
-not transferred bytes, and cannot be silently converted into roofline traffic.
-Preset definitions are documented in
+Additional tags cover L1 data misses, L2/L3 accesses, branches and mispredictions,
+loads, stores, and resource stalls. Availability depends on hardware and PAPI.
+Cache counts are not transferred bytes; resource stalls do not identify L2/L3
+stalls. Preset definitions are documented in
 [PAPI's event definitions](https://github.com/icl-utk-edu/papi/blob/72a3124d048dc5c89eb3f00c9f2866f4492b5383/src/papiStdEventDefs.h).
 
 ### Native mappings and units
@@ -185,18 +163,9 @@ its package-energy event in nJ, so the declared conversion produces joules.
 It requires a build with the `rapl` component and permission to collect it.
 See [PAPI's RAPL implementation](https://github.com/icl-utk-edu/papi/blob/72a3124d048dc5c89eb3f00c9f2866f4492b5383/src/components/rapl/linux-rapl.c).
 
-Similarly, map `coreFrequency` to hertz, `achievedOccupancy` to a ratio, or
-`transferredBytes` to bytes. The selected event must actually provide that
-quantity for the requested region. An instantaneous frequency sample is not an
-average frequency; mapping cannot change the provider's sampling semantics.
-Device/context events remain rejected for CPU queue worker collection. A host
-region preserves their provider scope and does not claim per-kernel attribution.
-
-Conversions require a positive finite scale. Results retain native name, native
-unit, provider scope and `nativeToValueScale`. Unscaled integer values retain
-their integer representation; scaled values become doubles. Missing events and
-conversion overflow have no value. The software-counter test verifies conversion
-through real PAPI; it does not constitute a hardware-energy measurement.
+Other mappings need verified units and a positive finite scale. Mapping preserves
+provider scope and sampling semantics; it does not establish per-kernel
+attribution. Device/context events cannot be collected as CPU queue worker counters.
 
 ```cpp
 auto available = alpakaMetrics::HostSideInstrumentation::getAvailableMetrics();
@@ -212,11 +181,6 @@ may lose integer precision. Unsupported metrics have no value, and converting
 them throws. Collection does not automatically replay kernels or multiplex
 counter sets. PAPI's global runtime is not shut down by this library.
 
-Native values follow PAPI's reported datatype. PAPI 7.2's SDE component does not
-report floating-point datatype metadata; use integer SDE counters with this
-version. SDE can also accept unregistered names as placeholders, so discovery
-and successful registration do not prove that an application supplies a counter.
-
 ## Tuner interoperability
 
 The current alpaka3-tuner accepts the adapter as a queue. Its custom-objective
@@ -228,44 +192,65 @@ auto measurement = queue.getMeasurements().back();
 tuner.provideMetric(measurement.getResults().getMetric("elapsed_time").asDouble());
 ```
 
-Provide the objective before the tuner's next enqueue: its current
-`provideMetric()` contract refers to the most recent launch. This example does
-not claim asynchronous feedback support inside the tuner. Built-in tuner timing
-also composes with the adapter; its synchronization events are forwarded.
+Provide the objective before the next tuner enqueue: `provideMetric()` refers to
+the most recent launch. Built-in tuner timing also works with the adapter.
+Enable the optional integration test with `-DalpakaMetrics_BUILD_TESTING=ON`
+and `-DalpakaMetrics_TUNER_SOURCE_DIR=/absolute/path/to/alpaka3-tuner`.
 
-An optional interoperability test reads a supplied tuner checkout without
-changing it or adding a runtime library dependency:
+## Roofline analysis
 
-```sh
-cmake -S . -B build-tuner -DalpakaMetrics_DEP_PAPI=OFF \
-  -DalpakaMetrics_BUILD_TESTING=ON \
-  -DalpakaMetrics_TUNER_SOURCE_DIR=/absolute/path/to/alpaka3-tuner
-cmake --build build-tuner
-ctest --test-dir build-tuner --output-on-failure
+The analysis layer is independent of collection and of the tuner:
+
+```cpp
+alpakaMetrics::RooflineCeilings ceilings{
+    .computeFlopsPerSecond = measuredComputeCeiling,
+    .memoryBytesPerSecond = measuredMemoryCeiling,
+    .computeMode = "FP64",
+    .memoryLevel = "DRAM",
+    .provenance = "device calibration under the workload's execution configuration"};
+auto analysis = alpakaMetrics::analyzeRoofline(measurement.getResults(), ceilings);
 ```
 
-## Further providers and roofline analysis
+The result must contain available `elapsed_time` in seconds,
+`floating_point_operations` as an operation count, and `transferred_bytes` in
+bytes. `RooflineMetrics` selects alternative names for native mappings. The
+operation convention (including fused multiply-add counting), compute mode,
+memory level and device configuration must agree with the supplied ceilings.
 
-Backend providers specialize `alpakaMetrics::internal::Enqueue::Op<Api>` and
-return a `Measurement`. Keep vendor resource management and dispatch attribution
-inside those specializations. Do not invoke GPU profiling APIs from vendor host
-callbacks. A future collection plan must expose synchronization, serialization,
-replay and attribution scope before execution.
+The analysis returns arithmetic intensity (FLOP/byte), achieved FLOP/s and byte/s,
+ridge point, the applicable roofline ceiling, fraction of that ceiling, and
+whether the selected model ceiling is compute or bandwidth limited. This model
+classification is not proof of the workload's actual bottleneck. Measurements
+above the ceiling remain visible through `exceedsCeiling`; they are not clamped.
 
-GPU dispatch counters, OpenMP/TBB worker aggregation, telemetry sampling and
-roofline calibration/analysis are **planned, not implemented**. Roofline analysis
-will need executed-operation counts, traffic at a specified memory level, timing
-and independently established device ceilings. Occupancy alone cannot provide it.
+Time, counts and ceilings must be positive and finite. Missing metrics, wrong
+units, mismatched attribution, missing ceiling provenance and unrepresentable
+derived values are rejected. Cache miss/access counts cannot stand in for bytes.
+The result overload accepts host-region timing with calling-thread counts, or
+queue-interval timing with queue-worker counts. It also accepts counts explicitly
+attributed to the corresponding host region or queue interval. Device-wide,
+context-wide and provider-defined counts cannot automatically be paired with
+per-queue timing.
 
-Primary references:
+If an external collector establishes matching attribution, use the scalar
+overload explicitly:
 
-- [PAPI overview](https://github.com/icl-utk-edu/papi)
-- [PAPI CUDA component](https://github.com/icl-utk-edu/papi/blob/master/src/components/cuda/README.md)
-- [PAPI ROCprofiler-SDK component](https://github.com/icl-utk-edu/papi/blob/master/src/components/rocp_sdk/README.md)
-- [PAPI Intel GPU component](https://github.com/icl-utk-edu/papi/blob/master/src/components/intel_gpu/README.md)
-- [CUPTI collection and replay](https://docs.nvidia.com/cupti/main/main.html)
-- [ROCprofiler counter collection](https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/api-reference/counter_collection_services.html)
-- [Nsight Compute roofline methodology](https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html)
-- [PAPI exascale paper](https://doi.org/10.1177/10943420241303884)
+```cpp
+auto analysis = alpakaMetrics::analyzeRoofline(
+    alpakaMetrics::RooflineSample{elapsedSeconds, executedFlops, transferredBytes},
+    ceilings);
+```
+
+That overload relies on the caller to establish a common measured region. No
+hardware calibration, vendor counter selection or automatic plot generation is
+performed. This is the analysis layer, not an NCU-equivalent collection workflow.
+See [NERSC's Roofline methodology](https://docs.nersc.gov/tools/performance/roofline/)
+for measurement and calibration requirements.
+
+GPU dispatch counters, OpenMP/TBB worker aggregation, automatic telemetry sampling
+and roofline device calibration are **planned, not implemented**. Native mappings
+and roofline analysis do not remove these collection requirements.
+
+See the [PAPI documentation](https://github.com/icl-utk-edu/papi) for component setup.
 
 Licensed under MPL-2.0. Fetched dependencies retain their own licenses.

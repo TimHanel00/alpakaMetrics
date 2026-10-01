@@ -6,3 +6,4 @@
 #include "alpakaMetrics/Measurement.hpp"
 #include "alpakaMetrics/Queue.hpp"
 #include "alpakaMetrics/Result.hpp"
+#include "alpakaMetrics/Roofline.hpp"

@@ -8,6 +8,15 @@ alpaka_finalize(alpakaMetrics_contracts)
 add_test(NAME alpakaMetrics.contracts COMMAND alpakaMetrics_contracts)
 set_tests_properties(alpakaMetrics.contracts PROPERTIES TIMEOUT 30)
 
+add_executable(alpakaMetrics_roofline roofline.cpp)
+target_link_libraries(
+    alpakaMetrics_roofline
+    PRIVATE alpakaMetrics::alpakaMetrics
+)
+alpaka_finalize(alpakaMetrics_roofline)
+add_test(NAME alpakaMetrics.roofline COMMAND alpakaMetrics_roofline)
+set_tests_properties(alpakaMetrics.roofline PROPERTIES TIMEOUT 30)
+
 if(alpakaMetrics_TUNER_SOURCE_DIR)
     if(
         NOT EXISTS
