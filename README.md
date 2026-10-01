@@ -148,6 +148,24 @@ The occupancy, energy and frequency tags currently return `unsupported` until a
 semantic provider mapping exists. Native energy/frequency events can be requested
 through PAPI when their components are configured and accessible.
 
+Additional CPU tags (availability depends on the hardware and PAPI definitions):
+
+| Tag | PAPI preset | Definition |
+| --- | --- | --- |
+| `l1DataMisses` | `PAPI_L1_DCM` | L1 data-cache misses |
+| `l2Accesses` | `PAPI_L2_TCA` | Total L2 cache accesses |
+| `l3Accesses` | `PAPI_L3_TCA` | Total L3 cache accesses |
+| `branchInstructions` | `PAPI_BR_INS` | Executed branch instructions |
+| `branchMispredictions` | `PAPI_BR_MSP` | Mispredicted conditional branches |
+| `loadInstructions` | `PAPI_LD_INS` | Executed load instructions |
+| `storeInstructions` | `PAPI_SR_INS` | Executed store instructions |
+| `resourceStallCycles` | `PAPI_RES_STL` | Processor cycles stalled on a resource |
+
+Resource stalls do not identify L2/L3 stalls. Cache accesses and misses are counts,
+not transferred bytes, and cannot be silently converted into roofline traffic.
+Preset definitions are documented in
+[PAPI's event definitions](https://github.com/icl-utk-edu/papi/blob/72a3124d048dc5c89eb3f00c9f2866f4492b5383/src/papiStdEventDefs.h).
+
 ```cpp
 auto available = alpakaMetrics::HostSideInstrumentation::getAvailableMetrics();
 // Discovery describes supported event definitions, not guaranteed collectibility.

@@ -81,6 +81,44 @@ namespace
             [] { HostSideInstrumentation invalid{Config{.metrics = {metric::elapsedTime, metric::elapsedTime}}}; });
     }
 
+    void testAdditionalCounters()
+    {
+        using namespace alpakaMetrics;
+        Config config{
+            .metrics
+            = {metric::elapsedTime,
+               metric::l1DataMisses,
+               metric::l2Accesses,
+               metric::l3Accesses,
+               metric::branchInstructions,
+               metric::branchMispredictions,
+               metric::loadInstructions,
+               metric::storeInstructions,
+               metric::resourceStallCycles}};
+        HostSideInstrumentation host{config};
+        host.begin();
+        std::atomic<std::uint64_t> count{};
+        for(std::uint64_t i = 0u; i < 10000u; ++i)
+            count.fetch_add(i % 3u, std::memory_order_relaxed);
+        auto result = host.end();
+        check(result.metrics.size() == config.metrics.size(), "Mixed counter request lost result entries");
+        check(result.getMetric("elapsed_time").isAvailable(), "Counter failures disabled timing");
+        for(std::size_t i = 1u; i < result.metrics.size(); ++i)
+        {
+            auto const& metric = result.metrics[i];
+            if(metric.isAvailable())
+            {
+                check(metric.descriptor.unit == MetricUnit::count, "CPU preset count unit lost");
+                check(metric.asDouble() >= 0.0, "CPU preset returned a negative count");
+            }
+            else
+            {
+                check(!metric.value.has_value(), "Failed CPU preset has a fabricated value");
+                check(!metric.diagnostic.empty(), "Failed CPU preset has no diagnostic");
+            }
+        }
+    }
+
     void testQueue(bool blocking)
     {
         using namespace alpakaMetrics;
@@ -219,6 +257,7 @@ int main()
     try
     {
         testHostRegions();
+        testAdditionalCounters();
         testQueue(false);
         testQueue(true);
         testQueueDelay();

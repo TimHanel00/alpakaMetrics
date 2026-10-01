@@ -35,6 +35,38 @@ namespace alpakaMetrics
         {
         };
 
+        struct L1DataMisses
+        {
+        };
+
+        struct L2Accesses
+        {
+        };
+
+        struct L3Accesses
+        {
+        };
+
+        struct BranchInstructions
+        {
+        };
+
+        struct BranchMispredictions
+        {
+        };
+
+        struct LoadInstructions
+        {
+        };
+
+        struct StoreInstructions
+        {
+        };
+
+        struct ResourceStallCycles
+        {
+        };
+
         struct AchievedOccupancy
         {
         };
@@ -53,6 +85,14 @@ namespace alpakaMetrics
         inline constexpr FloatingPointOperations floatingPointOperations{};
         inline constexpr L2Misses l2Misses{};
         inline constexpr L3Misses l3Misses{};
+        inline constexpr L1DataMisses l1DataMisses{};
+        inline constexpr L2Accesses l2Accesses{};
+        inline constexpr L3Accesses l3Accesses{};
+        inline constexpr BranchInstructions branchInstructions{};
+        inline constexpr BranchMispredictions branchMispredictions{};
+        inline constexpr LoadInstructions loadInstructions{};
+        inline constexpr StoreInstructions storeInstructions{};
+        inline constexpr ResourceStallCycles resourceStallCycles{};
         inline constexpr AchievedOccupancy achievedOccupancy{};
         inline constexpr Energy energy{};
         inline constexpr CoreFrequency coreFrequency{};
@@ -94,6 +134,38 @@ namespace alpakaMetrics
         }
 
         MetricRequest(metric::L3Misses) : name{"l3_misses"}, papiName{"PAPI_L3_TCM"}
+        {
+        }
+
+        MetricRequest(metric::L1DataMisses) : name{"l1_data_misses"}, papiName{"PAPI_L1_DCM"}
+        {
+        }
+
+        MetricRequest(metric::L2Accesses) : name{"l2_accesses"}, papiName{"PAPI_L2_TCA"}
+        {
+        }
+
+        MetricRequest(metric::L3Accesses) : name{"l3_accesses"}, papiName{"PAPI_L3_TCA"}
+        {
+        }
+
+        MetricRequest(metric::BranchInstructions) : name{"branch_instructions"}, papiName{"PAPI_BR_INS"}
+        {
+        }
+
+        MetricRequest(metric::BranchMispredictions) : name{"branch_mispredictions"}, papiName{"PAPI_BR_MSP"}
+        {
+        }
+
+        MetricRequest(metric::LoadInstructions) : name{"load_instructions"}, papiName{"PAPI_LD_INS"}
+        {
+        }
+
+        MetricRequest(metric::StoreInstructions) : name{"store_instructions"}, papiName{"PAPI_SR_INS"}
+        {
+        }
+
+        MetricRequest(metric::ResourceStallCycles) : name{"resource_stall_cycles"}, papiName{"PAPI_RES_STL"}
         {
         }
 
