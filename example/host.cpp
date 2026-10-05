@@ -36,7 +36,7 @@ auto example(alpaka::concepts::BackendSpec auto const& backend) -> int
     auto spec = alpaka::onHost::FrameSpec{alpaka::Vec{100000u}, alpaka::Vec{1u}, alpaka::getExecutor(backend)};
     auto first = queue.enqueue(spec, Work{}, outputDevice);
     auto second = queue.enqueue(spec, Work{}, outputDevice);
-    alpaka::onHost::memcpy(queue, outputHost, outputDevice);
+    alpaka::onHost::memcpy(queue.getUnderlyingQueue(), outputHost, outputDevice);
     alpaka::onHost::wait(queue);
     auto region = hostSession.end();
     std::cout << "Backend " << device.getName() << " accumulated output: " << outputHost[0u] << '\n';

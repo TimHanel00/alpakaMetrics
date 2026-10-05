@@ -5,17 +5,26 @@
 #include "alpakaMetrics/Result.hpp"
 
 #include <memory>
+#include <string_view>
 
 namespace alpakaMetrics::internal
 {
+    struct DeviceCounterTarget
+    {
+        std::string_view component;
+        std::uint32_t device{};
+    };
+
     class PapiCounters
     {
     public:
-        explicit PapiCounters(Config const& config);
+        explicit PapiCounters(Config const& config, std::optional<DeviceCounterTarget> target = std::nullopt);
         ~PapiCounters();
         PapiCounters(PapiCounters const&) = delete;
         PapiCounters& operator=(PapiCounters const&) = delete;
         void begin();
+        [[nodiscard]] bool hasEvents() const;
+        [[nodiscard]] bool isRunning() const;
         std::vector<MetricResult> end();
         static std::vector<MetricDescriptor> getAvailableMetrics();
 

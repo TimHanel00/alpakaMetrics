@@ -1,0 +1,109 @@
+name: CI Build and Test
+
+on:
+  push: {}
+  pull_request: {}
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  alpaka_cmake_flags: "-DalpakaMetrics_BUILD_TESTING=ON -DalpakaMetrics_BUILD_EXAMPLES=ON -Dalpaka_LOG=dynamic -Dalpaka_FAST_MATH=OFF"
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run pre-commit
+        run: |
+          python -m pip install pre-commit==4.3.0
+          pre-commit run --all-files --show-diff-on-failure
+
+  ci:
+    name: ${{ matrix.config.name }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - { name: "GCC 13 / PAPI off", compiler: gcc, version: "13", cuda: "no", hip: "no", papi: "OFF", container: "ubuntu:24.04" }
+          - { name: "GCC 13 / PAPI + SDE", compiler: gcc, version: "13", cuda: "no", hip: "no", papi: "ON", container: "ubuntu:24.04" }
+          - { name: "CUDA 12.9 / PAPI CUDA", compiler: nvcc, version: "", cuda: "12.9", hip: "no", papi: "ON", container: "nvidia/cuda:12.9.1-devel-ubuntu24.04" }
+          - { name: "HIP 6.4.2 / PAPI ROCP_SDK", compiler: clang, version: "19", cuda: "no", hip: "6.4.2", papi: "ON", container: "rocm/dev-ubuntu-24.04:6.4.2" }
+
+    container:
+      image: ${{ matrix.config.container }}
+
+    steps:
+      - name: Install git before checkout
+        run: |
+          if ! command -v git >/dev/null 2>&1; then
+            apt-get update
+            apt-get install -y git ca-certificates
+          fi
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install base dependencies
+        run: |
+          apt-get update
+          apt-get install -y cmake build-essential ninja-build ca-certificates
+      - name: Install GCC
+        if: matrix.config.compiler == 'gcc'
+        run: |
+          apt-get install -y gcc-${{ matrix.config.version }} g++-${{ matrix.config.version }}
+      - name: Install PAPI build tools
+        if: matrix.config.papi == 'ON'
+        run: |
+          apt-get install -y autoconf automake libtool pkg-config
+      - name: Set up ROCm
+        if: matrix.config.hip != 'no'
+        run: |
+          apt-get install -y hiprand-dev rocrand-dev rocprofiler-sdk hsa-rocr-dev
+          echo "ROCM_PATH=/opt/rocm" >> "$GITHUB_ENV"
+          echo "CMAKE_PREFIX_PATH=/opt/rocm" >> "$GITHUB_ENV"
+          echo "HIP_PLATFORM=amd" >> "$GITHUB_ENV"
+          echo "HIP_DEVICE_LIB_PATH=/opt/rocm/amdgcn/bitcode" >> "$GITHUB_ENV"
+          echo "HSA_PATH=/opt/rocm" >> "$GITHUB_ENV"
+          echo "PAPI_ROCP_SDK_ROOT=/opt/rocm" >> "$GITHUB_ENV"
+          echo "/opt/rocm/bin" >> "$GITHUB_PATH"
+          echo "/opt/rocm/llvm/bin" >> "$GITHUB_PATH"
+      - name: Set up PAPI CUDA
+        if: matrix.config.cuda != 'no'
+        run: echo "PAPI_CUDA_ROOT=/usr/local/cuda" >> "$GITHUB_ENV"
+      - name: Configure CMake
+        run: |
+          if [ "${{ matrix.config.compiler }}" = "gcc" ]; then
+            export CC=gcc-${{ matrix.config.version }}
+            export CXX=g++-${{ matrix.config.version }}
+          elif [ "${{ matrix.config.hip }}" != "no" ]; then
+            export CC=/opt/rocm/llvm/bin/clang
+            export CXX=/opt/rocm/llvm/bin/clang++
+          fi
+
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            ${alpaka_cmake_flags} \
+            -Dalpaka_DEP_OMP=ON \
+            -DalpakaMetrics_DEP_PAPI=${{ matrix.config.papi }} \
+            ${{ matrix.config.compiler == 'gcc' && matrix.config.papi == 'ON' && '-DalpakaMetrics_PAPI_COMPONENTS=sde' || '' }} \
+            ${{ matrix.config.cuda != 'no' && '-DalpakaMetrics_PAPI_COMPONENTS=cuda' || '' }} \
+            ${{ matrix.config.hip != 'no' && '-DalpakaMetrics_PAPI_COMPONENTS=rocp_sdk' || '' }} \
+            ${{ matrix.config.cuda != 'no' && '-Dalpaka_DEP_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=75' || '' }} \
+            ${{ matrix.config.hip != 'no' && '-Dalpaka_DEP_HIP=ON -Dalpaka_DEP_OMP=OFF -DCMAKE_HIP_ARCHITECTURES=gfx906 -DAMDGPU_TARGETS=gfx906' || '' }}
+      - name: Build
+        run: cmake --build build --parallel 2
+      # Hosted runners have no GPU; accelerator jobs validate compilation only.
+      - name: Run tests
+        if: matrix.config.cuda == 'no' && matrix.config.hip == 'no'
+        run: ctest --test-dir build --output-on-failure --no-tests=error

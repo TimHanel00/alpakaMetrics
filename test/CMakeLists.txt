@@ -17,6 +17,30 @@ alpaka_finalize(alpakaMetrics_roofline)
 add_test(NAME alpakaMetrics.roofline COMMAND alpakaMetrics_roofline)
 set_tests_properties(alpakaMetrics.roofline PROPERTIES TIMEOUT 30)
 
+add_executable(alpakaMetrics_deviceCounters deviceCounters.cpp)
+target_link_libraries(
+    alpakaMetrics_deviceCounters
+    PRIVATE alpakaMetrics::alpakaMetrics
+)
+alpaka_finalize(alpakaMetrics_deviceCounters)
+add_test(NAME alpakaMetrics.deviceCounters COMMAND alpakaMetrics_deviceCounters)
+set_tests_properties(alpakaMetrics.deviceCounters PROPERTIES TIMEOUT 30)
+
+add_executable(alpakaMetrics_deviceExecution deviceExecution.cpp)
+target_link_libraries(
+    alpakaMetrics_deviceExecution
+    PRIVATE alpakaMetrics::alpakaMetrics
+)
+alpaka_finalize(alpakaMetrics_deviceExecution)
+add_test(
+    NAME alpakaMetrics.deviceExecution
+    COMMAND alpakaMetrics_deviceExecution
+)
+set_tests_properties(
+    alpakaMetrics.deviceExecution
+    PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77
+)
+
 if(alpakaMetrics_TUNER_SOURCE_DIR)
     if(
         NOT EXISTS
