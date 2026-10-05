@@ -1,6 +1,6 @@
 # alpakaMetrics
 This repository adds support native runtime metrics support for alpaka 3 (https://github.com/alpaka-group/alpaka3) as an optional instrumentation adapter.
-The goal is to enhance profiling utilities across Vendor APIs. Most utilities and metrics are enabled by PAPI, which remains a optional but important dependency of this repository. 
+The goal is to enhance profiling utilities across Vendor APIs. Most utilities and metrics are enabled by PAPI, which remains a optional but important dependency of this repository.
 PAPI has support for CPU, CUDA and HIP specific hardware counters and is therefore a natural fit, that is compatible with alpakas generic approach on supporting multiple vendor APIs.
 
 ## Build

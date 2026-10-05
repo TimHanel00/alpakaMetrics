@@ -1,34 +1,45 @@
 // SPDX-License-Identifier: MPL-2.0
 #include <alpakaMetrics/alpakaMetrics.hpp>
 
-#include <atomic>
+#include <cstdint>
 #include <iostream>
 
 struct Work
 {
-    void operator()(auto const&, std::atomic<std::uint64_t>* output) const
+    ALPAKA_FN_ACC void operator()(auto const& acc, auto output) const
     {
-        for(std::uint64_t i = 0u; i < 100000u; ++i)
-            output->fetch_add(i, std::memory_order_relaxed);
+        for(auto const idx : alpaka::onAcc::makeIdxMap(
+                acc,
+                alpaka::onAcc::worker::threadsInGrid,
+                alpaka::IdxRange{alpaka::Vec{100000u}}))
+            alpaka::onAcc::atomicAdd(acc, &output[alpaka::Vec{0u}], static_cast<std::uint64_t>(idx.x()));
     }
 };
 
-int main()
+auto example(alpaka::concepts::BackendSpec auto const& backend) -> int
 {
-    auto device = alpaka::onHost::makeDeviceSelector(alpaka::api::host, alpaka::deviceKind::cpu).makeDevice(0u);
+    auto deviceSelector = alpaka::onHost::makeDeviceSelector(alpaka::onHost::DeviceSpec{backend});
+    if(!deviceSelector.isAvailable())
+        return 0;
+
+    auto device = deviceSelector.makeDevice(0u);
     auto rawQueue = device.makeQueue(alpaka::queueKind::nonBlocking, alpaka::timing::enabled);
+    auto outputDevice = alpaka::onHost::alloc<std::uint64_t>(device, alpaka::Vec{1u});
+    auto outputHost = alpaka::onHost::allocHostLike(outputDevice);
+    alpaka::onHost::memset(rawQueue, outputDevice, 0u);
     alpakaMetrics::Config config{
         .metrics = {alpakaMetrics::metric::elapsedTime, alpakaMetrics::metric::instructions},
         .label = "work"};
     auto queue = alpakaMetrics::makeQueue(rawQueue, config);
     auto hostSession = alpakaMetrics::HostSideInstrumentation(config);
-    std::atomic<std::uint64_t> output{};
     hostSession.begin();
-    auto spec = alpaka::onHost::FrameSpec{alpaka::Vec{4u}, alpaka::Vec{1u}, alpaka::exec::cpuSerial};
-    auto first = queue.enqueue(spec, Work{}, &output);
-    auto second = queue.enqueue(spec, Work{}, &output);
+    auto spec = alpaka::onHost::FrameSpec{alpaka::Vec{100000u}, alpaka::Vec{1u}, alpaka::getExecutor(backend)};
+    auto first = queue.enqueue(spec, Work{}, outputDevice);
+    auto second = queue.enqueue(spec, Work{}, outputDevice);
+    alpaka::onHost::memcpy(queue, outputHost, outputDevice);
     alpaka::onHost::wait(queue);
     auto region = hostSession.end();
+    std::cout << "Backend " << device.getName() << " accumulated output: " << outputHost[0u] << '\n';
     for(auto const& result : {first.getResults(), second.getResults(), region})
     {
         std::cout << "Measurement " << result.measurementId << '\n';
@@ -42,4 +53,12 @@ int main()
             std::cout << '\n';
         }
     }
+    return 0;
+}
+
+auto main() -> int
+{
+    return alpaka::onHost::executeForEach(
+        [](alpaka::concepts::BackendSpec auto const& backend) { return example(backend); },
+        alpaka::onHost::allBackends(alpaka::onHost::enabledDeviceSpecs, alpaka::exec::enabledExecutors));
 }
