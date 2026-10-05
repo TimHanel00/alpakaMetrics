@@ -26,6 +26,14 @@ remain available. To use installed PAPI, set
 `-DalpakaMetrics_USE_SYSTEM_PAPI=ON` and supply `CMAKE_PREFIX_PATH` if needed.
 An existing `PAPI::PAPI` target is also accepted.
 
+GitHub Actions runs a sparse container matrix following alpaka3-tuner's CI:
+GCC 13 with PAPI disabled, GCC 13 with bundled PAPI and SDE, CUDA 12.9 with
+PAPI's CUDA component, and HIP 6.4.2 with PAPI's ROCP_SDK component.
+All four configurations build the tests, examples, and standalone
+header checks. The GCC jobs run CTest, including the SDE counter test when
+enabled. CUDA and HIP jobs check compilation only because the hosted runners
+have no GPU. A separate job runs pre-commit.
+
 Additional bundled components are selected with, for example:
 
 ```sh
@@ -123,13 +131,90 @@ can compete for counter resources; conflicts are reported per metric.
 | Queued host function | Function execution interval | Calling-thread counters on the executing callback thread |
 | CPU kernel with explicit `exec::cpuSerial` | Host queue execution interval | PAPI CPU counters on the queue worker |
 | OpenMP/TBB/default CPU executor | Host queue execution interval | `unsupportedScope`; no launcher-only counters passed off as team counters |
-| GPU/SYCL kernel | Alpaka timing-event interval | `unsupportedScope` until a native attribution provider is implemented |
+| CUDA kernel | Alpaka timing-event interval | Explicit PAPI CUDA native mappings, retaining context scope |
+| HIP kernel | Alpaka timing-event interval | Explicit PAPI ROCP_SDK native mappings in sampling mode, retaining device scope |
+| SYCL kernel | Alpaka timing-event interval | `unsupportedScope` until a native counter provider is implemented |
 
 Queue intervals exclude work queued before the start marker. They can include
 queue bookkeeping and idle gaps **between** markers, so they are not labelled
 kernel-exclusive durations. Device timing requires a timing-enabled queue.
-The portable event provider is covered by host-event tests; CUDA, HIP and SYCL
-hardware execution has not yet been validated.
+The collection lifecycle is tested with real PAPI SDE counters on a host queue.
+CUDA compilation is checked locally; CUDA, HIP and SYCL hardware collection has
+not yet been validated.
+
+### Native CUDA and HIP queue counters
+
+The adapter implements GPU collection without modifying Alpaka. It selects the
+queue's native device through `enqueueNativeFn()` and calls PAPI on the submitting
+thread. `queue.enqueue()` completes native collection before returning when at
+least one counter starts successfully. `Result::synchronized` records this.
+Timing-only launches and launches with unavailable counters remain asynchronous
+on non-blocking queues.
+
+Build with `-Dalpaka_DEP_CUDA=ON -DalpakaMetrics_PAPI_COMPONENTS=cuda` and set
+`PAPI_CUDA_ROOT` to your CUDA toolkit for both the build and execution. For HIP,
+use `-Dalpaka_DEP_HIP=ON -DalpakaMetrics_PAPI_COMPONENTS=rocp_sdk` and set
+`PAPI_ROCP_SDK_ROOT` to your ROCm installation. Both paths require PAPI enabled
+and a timing-enabled queue. See the pinned
+[CUDA component documentation](https://github.com/icl-utk-edu/papi/blob/72a3124d048dc5c89eb3f00c9f2866f4492b5383/src/components/cuda/README.md)
+and [ROCP_SDK component documentation](https://github.com/icl-utk-edu/papi/blob/72a3124d048dc5c89eb3f00c9f2866f4492b5383/src/components/rocp_sdk/README.md)
+for SDK libraries and runtime setup.
+
+Choose native event names supported by your device from
+`HostSideInstrumentation::getAvailableMetrics()`. CUDA queues accept `cuda:::`
+events; HIP queues accept `rocp_sdk:::` events. CPU presets such as `PAPI_TOT_INS`
+are rejected on GPU queues. Use `metric::map()` to bind semantic tags to verified
+GPU events and units:
+
+```cpp
+alpakaMetrics::Config config{.metrics = {
+    alpakaMetrics::metric::elapsedTime,
+    alpakaMetrics::metric::map(
+        alpakaMetrics::metric::instructions,
+        alpakaMetrics::metric::native(nativeInstructionEvent,
+                                     alpakaMetrics::MetricUnit::count))}};
+auto queue = alpakaMetrics::makeQueue(rawQueue, config);
+auto measurement = queue.enqueue(frameSpec, kernel, args...);
+auto result = measurement.getResults();
+```
+
+A missing `:device=` qualifier is filled from the native queue device index.
+Explicit qualifiers must match that index. HIP visibility remapping through
+`HIP_VISIBLE_DEVICES`, `ROCR_VISIBLE_DEVICES`, `CUDA_VISIBLE_DEVICES`, or
+`GPU_DEVICE_ORDINAL` is
+currently rejected because PAPI agent indices cannot safely be equated with
+remapped HIP ordinals.
+
+The provider finishes preceding work on the measured queue before starting
+counters, launches once, waits for completion, and stops counters on the same
+thread. Results retain typed native values, conversions, and per-metric errors;
+the completed snapshot can be read from another thread. No automatic replay or
+multiplexing is performed. The CUDA component rejects counters requiring
+multiple passes. Overlapping CUDA/ROCP_SDK counter regions within alpakaMetrics
+report `conflicting`.
+
+Counter scope remains **context** for CUDA and **device** for HIP. Other streams
+and external profiling tools can affect those counters; the wrapper does not
+establish exclusive per-kernel attribution. Operations submitted through the
+underlying queue bypass instrumentation.
+
+Leave `PAPI_ROCP_SDK_DISPATCH_MODE` unset for HIP. The pinned component's dispatch
+mode does not guarantee that records have been flushed when a kernel completes;
+the adapter reports `unsupportedScope` in this mode rather than returning an
+unverified counter snapshot. Sampling mode uses PAPI's synchronous sample read.
+
+To run the optional hardware test, supply a supported single-pass instruction
+or cycle event that produces a positive value on device 0:
+
+```sh
+ALPAKA_METRICS_TEST_CUDA_EVENT="$nativeCudaEvent" \
+  ctest --test-dir build-cuda -R '^alpakaMetrics.deviceExecution$' --output-on-failure
+# For a HIP build, use ALPAKA_METRICS_TEST_HIP_EVENT instead.
+```
+
+Without a configured event for an enabled GPU backend, this test reports a skip.
+It verifies two launches without replay, positive native counters, timing,
+scope, retained snapshots, and retrieval from another thread.
 
 Semantic CPU mappings currently include cycles, instructions, floating-point
 operations and L2/L3 total cache misses through their PAPI presets. Always inspect

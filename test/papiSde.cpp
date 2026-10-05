@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
-#include <alpakaMetrics/HostSideInstrumentation.hpp>
+#include <alpakaMetrics/alpakaMetrics.hpp>
 #include <sde_lib.h>
 
+#include <future>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -86,6 +87,65 @@ int main()
         if(scopeResult.status != alpakaMetrics::MetricStatus::unsupportedScope || scopeResult.value
            || scopeResult.descriptor.unit != alpakaMetrics::MetricUnit::joules)
             throw std::runtime_error{"Explicit mapping overrode the provider attribution scope"};
+        // Exercise the device-provider lifecycle with real PAPI SDE counters and
+        // a real asynchronous Alpaka host queue; this does not require GPU hardware.
+        auto device = alpaka::onHost::makeDeviceSelector(alpaka::api::host, alpaka::deviceKind::cpu).makeDevice(0u);
+        auto queue = device.makeQueue(alpaka::queueKind::nonBlocking, alpaka::timing::enabled);
+        alpakaMetrics::Config deviceConfig{
+            .metrics
+            = {alpakaMetrics::metric::elapsedTime, alpakaMetrics::metric::native("sde:::alpakaMetricsTest::integers")},
+            .label = "device-lifecycle"};
+        std::uint64_t launches{};
+        queue.enqueueHostFn([&integers] { integers += 1000; });
+        auto measurement = [&]
+        {
+            alpakaMetrics::internal::PapiCounters counters{deviceConfig};
+            return alpakaMetrics::internal::enqueueDevice(
+                queue,
+                deviceConfig,
+                [&]
+                {
+                    queue.enqueueHostFn(
+                        [&]
+                        {
+                            integers += 5;
+                            ++launches;
+                        });
+                },
+                &counters);
+        }();
+        // The thread-affine event set has already been destroyed. Reading the
+        // retained snapshot from another thread must still work.
+        auto deviceResult = std::async(std::launch::async, [measurement] { return measurement.getResults(); }).get();
+        if(deviceResult.getMetric("sde:::alpakaMetricsTest::integers").asDouble() != 5.0
+           || !deviceResult.getMetric("elapsed_time").isAvailable() || !deviceResult.synchronized
+           || deviceResult.replayed || deviceResult.passCount != 1u || launches != 1u
+           || deviceResult.label != "device-lifecycle")
+            throw std::runtime_error{"Device lifecycle included preceding work, replayed, or lost its snapshot"};
+        if(measurement.getResults().getMetric("sde:::alpakaMetricsTest::integers").asDouble() != 5.0)
+            throw std::runtime_error{"Repeated measurement reads changed the native counter result"};
+        {
+            alpakaMetrics::internal::PapiCounters counters{deviceConfig};
+            bool threw{};
+            try
+            {
+                static_cast<void>(alpakaMetrics::internal::enqueueDevice(
+                    queue,
+                    deviceConfig,
+                    [&]
+                    {
+                        queue.enqueueHostFn([&integers] { integers += 2; });
+                        throw std::runtime_error{"launch failure"};
+                    },
+                    &counters));
+            }
+            catch(std::runtime_error const& error)
+            {
+                threw = std::string_view{error.what()} == "launch failure";
+            }
+            if(!threw || counters.isRunning())
+                throw std::runtime_error{"Failed device launch left live counters or lost the exception"};
+        }
         std::cout << "Real PAPI SDE collection, conversion and scope checks passed\n";
     }
     catch(std::exception const& error)
