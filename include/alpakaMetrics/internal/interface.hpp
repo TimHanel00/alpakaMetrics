@@ -198,10 +198,117 @@ namespace alpakaMetrics::internal
         }
     };
 
-    /** Portable timing fallback. Native counters need an API-specific specialization.
-     * Specializations configure profiling on the submit thread; they must not invoke vendor profiling APIs in
-     * callbacks.
-     */
+    template<concepts::Queue T_Queue, typename T_Launch>
+    requires std::invocable<T_Launch const&>
+    Measurement enqueueDevice(
+        T_Queue const& queue,
+        Config const& config,
+        T_Launch launch,
+        PapiCounters* counters = nullptr)
+    {
+        if constexpr(std::same_as<decltype(queue.getTiming()), alpaka::timing::Enabled>)
+        {
+            auto start = queue.makeEvent();
+            auto end = queue.makeEvent();
+            auto state = std::make_shared<MeasurementState>();
+            state->id = nextMeasurementId();
+            bool synchronized = false;
+            try
+            {
+                if(counters && counters->hasEvents())
+                {
+                    // PAPI GPU sets are thread-affine and cover a context/device, not a stream.
+                    // Finish preceding queue work before opening the counter interval.
+                    alpaka::onHost::wait(queue);
+                    counters->begin();
+                    synchronized = counters->isRunning();
+                }
+                queue.enqueue(start);
+                launch();
+                queue.enqueue(end);
+                if(synchronized)
+                    alpaka::onHost::wait(end);
+            }
+            catch(...)
+            {
+                // A launch can fail after partially submitting work. Complete it before
+                // dismantling the profiling session, and preserve the original exception.
+                if(counters && counters->isRunning())
+                {
+                    try
+                    {
+                        alpaka::onHost::wait(queue);
+                        static_cast<void>(counters->end());
+                    }
+                    catch(...)
+                    {
+                    }
+                }
+                throw;
+            }
+            std::vector<MetricResult> counterResults;
+            if(counters)
+                counterResults = counters->end();
+            else
+                for(auto const& request : config.metrics)
+                    if(request.name != "elapsed_time")
+                        counterResults.push_back(makeUnavailable(
+                            request,
+                            MetricStatus::unsupportedScope,
+                            "This queue backend has no native counter provider"));
+            state->isComplete = [end] { return end.isComplete(); };
+            // Capture values, never a live PAPI event set. Results can be read on any thread.
+            state->read
+                = [start, end, config, counterResults = std::move(counterResults), id = state->id, synchronized]
+            {
+                // Also wait for counter-only measurements on the asynchronous fallback path.
+                alpaka::onHost::wait(end);
+                Result result;
+                result.measurementId = id;
+                result.label = config.label;
+                result.synchronized = synchronized;
+                std::size_t counterIndex = 0u;
+                for(auto const& request : config.metrics)
+                {
+                    if(request.name == "elapsed_time")
+                        result.metrics.push_back(
+                            {{request.name,
+                              {},
+                              "Execution interval between device queue markers",
+                              "alpaka_event",
+                              MetricUnit::seconds,
+                              MetricScope::queueInterval},
+                             MetricStatus::available,
+                             alpaka::onHost::getElapsedTime(start, end).count(),
+                             {}});
+                    else
+                        result.metrics.push_back(counterResults.at(counterIndex++));
+                }
+                return result;
+            };
+            return Measurement{std::move(state)};
+        }
+        else
+            throw std::invalid_argument{"Device profiling requires a timing-enabled Alpaka queue"};
+    }
+
+    template<concepts::Queue T_Queue, typename T_Launch>
+    requires std::invocable<T_Launch const&>
+    Measurement enqueuePapiDevice(
+        T_Queue const& queue,
+        Config const& config,
+        T_Launch launch,
+        std::string_view component)
+    {
+        // CUDA/HIP execute native functions on the submit thread and select the queue's
+        // device first. Do not call profiling APIs from a GPU host callback.
+        queue.enqueueNativeFn([](auto) {});
+        auto const device = alpaka::onHost::getNativeHandle(queue.getDevice());
+        PapiCounters counters{config, DeviceCounterTarget{component, static_cast<std::uint32_t>(device)}};
+        return enqueueDevice(queue, config, std::move(launch), &counters);
+    }
+
+    /** Portable timing fallback for APIs without a native counter provider. */
     template<typename T_Api>
     struct Enqueue::Op
     {
@@ -212,46 +319,35 @@ namespace alpakaMetrics::internal
         Measurement operator()(T_Queue const& queue, Config const& config, T_Spec const& spec, T_Bundle const& bundle)
             const
         {
-            if constexpr(std::same_as<decltype(queue.getTiming()), alpaka::timing::Enabled>)
-            {
-                auto start = queue.makeEvent();
-                auto end = queue.makeEvent();
-                auto state = std::make_shared<MeasurementState>();
-                state->id = nextMeasurementId();
-                state->isComplete = [end] { return end.isComplete(); };
-                queue.enqueue(start);
-                queue.enqueue(spec, bundle);
-                queue.enqueue(end);
-                state->read = [start, end, config, id = state->id]
-                {
-                    Result result;
-                    result.measurementId = id;
-                    result.label = config.label;
-                    for(auto const& request : config.metrics)
-                    {
-                        if(request.name == "elapsed_time")
-                            result.metrics.push_back(
-                                {{request.name,
-                                  {},
-                                  "Execution interval between device queue markers",
-                                  "alpaka_event",
-                                  MetricUnit::seconds,
-                                  MetricScope::queueInterval},
-                                 MetricStatus::available,
-                                 alpaka::onHost::getElapsedTime(start, end).count(),
-                                 {}});
-                        else
-                            result.metrics.push_back(makeUnavailable(
-                                request,
-                                MetricStatus::unsupportedScope,
-                                "This queue backend has no native counter attribution provider yet"));
-                    }
-                    return result;
-                };
-                return Measurement{std::move(state)};
-            }
-            else
-                throw std::invalid_argument{"Device profiling requires a timing-enabled Alpaka queue"};
+            return enqueueDevice(queue, config, [&] { queue.enqueue(spec, bundle); });
+        }
+    };
+
+    template<>
+    struct Enqueue::Op<alpaka::api::Cuda>
+    {
+        template<
+            concepts::Queue T_Queue,
+            alpaka::onHost::concepts::ThreadOrFrameSpec T_Spec,
+            alpaka::concepts::KernelBundle T_Bundle>
+        Measurement operator()(T_Queue const& queue, Config const& config, T_Spec const& spec, T_Bundle const& bundle)
+            const
+        {
+            return enqueuePapiDevice(queue, config, [&] { queue.enqueue(spec, bundle); }, "cuda");
+        }
+    };
+
+    template<>
+    struct Enqueue::Op<alpaka::api::Hip>
+    {
+        template<
+            concepts::Queue T_Queue,
+            alpaka::onHost::concepts::ThreadOrFrameSpec T_Spec,
+            alpaka::concepts::KernelBundle T_Bundle>
+        Measurement operator()(T_Queue const& queue, Config const& config, T_Spec const& spec, T_Bundle const& bundle)
+            const
+        {
+            return enqueuePapiDevice(queue, config, [&] { queue.enqueue(spec, bundle); }, "rocp_sdk");
         }
     };
 } // namespace alpakaMetrics::internal
