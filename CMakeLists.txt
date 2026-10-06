@@ -49,6 +49,7 @@ add_library(
     src/HostSideInstrumentation.cpp
     src/Collector.cpp
     src/Json.cpp
+    src/Session.cpp
     src/Roofline.cpp
 )
 add_library(alpakaMetrics::alpakaMetrics ALIAS alpakaMetrics)

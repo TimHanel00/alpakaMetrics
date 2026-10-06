@@ -3,7 +3,8 @@
 Instrumentation, collection and output have separate roles. The architectural
 separation takes inspiration from
 [`alpaka-group/bactria`](https://github.com/alpaka-group/bactria).
-alpakaMetrics owns Alpaka 3 operation identity, queue integration and direct results. Collectors own event selection, units, scopes and
+alpakaMetrics owns Alpaka 3 operation identity, queue integration, completion
+tracking and direct results. Collectors own event selection, units, scopes and
 collection errors. Export consumes completed results independently.
 
 The core library has no PAPI link dependency. Enabling `alpakaMetrics_DEP_PAPI`
@@ -47,3 +48,6 @@ destroy run on the collection thread. CPU queue counters use the queue worker.
 Synchronized device counters use the submitting thread and must declare
 `requiresDeviceSynchronization`. Discovery emits descriptors without values.
 See [the PAPI adapter](../plugins/papi/Plugin.cpp) for a concrete module.
+
+The completion service polls Alpaka events and publishes immutable snapshots.
+Collector sessions remain on their collection thread.

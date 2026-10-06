@@ -155,6 +155,30 @@ add_test(
 )
 set_tests_properties(alpakaMetrics.collectors PROPERTIES TIMEOUT 30)
 
+add_executable(alpakaMetrics_streaming streaming.cpp)
+target_link_libraries(
+    alpakaMetrics_streaming
+    PRIVATE alpakaMetrics::alpakaMetrics
+)
+alpaka_finalize(alpakaMetrics_streaming)
+add_test(NAME alpakaMetrics.streaming COMMAND alpakaMetrics_streaming)
+set_tests_properties(alpakaMetrics.streaming PROPERTIES TIMEOUT 30)
+
+add_executable(alpakaMetrics_streamingBackends streamingBackends.cpp)
+target_link_libraries(
+    alpakaMetrics_streamingBackends
+    PRIVATE alpakaMetrics::alpakaMetrics
+)
+alpaka_finalize(alpakaMetrics_streamingBackends)
+add_test(
+    NAME alpakaMetrics.streamingBackends
+    COMMAND alpakaMetrics_streamingBackends
+)
+set_tests_properties(
+    alpakaMetrics.streamingBackends
+    PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77
+)
+
 target_compile_definitions(
     alpakaMetrics_deviceCounters
     PRIVATE ALPAKA_METRICS_TEST_PAPI=$<BOOL:${alpakaMetrics_DEP_PAPI}>
@@ -168,6 +192,8 @@ if(TARGET alpakaMetrics_papi)
         deviceExecution
         papiSde
         collectors
+        streaming
+        streamingBackends
         tunerIntegration
     )
         if(TARGET alpakaMetrics_${_test})

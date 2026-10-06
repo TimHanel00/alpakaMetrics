@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
+#include <alpakaMetrics/Session.hpp>
 #include <alpakaMetrics/internal/interface.hpp>
 
 #include <mutex>
@@ -15,11 +16,15 @@ namespace alpakaMetrics
         {
             T_Queue queue;
             Config config;
+            Session session;
             std::uint64_t id{internal::nextMeasurementId()};
             mutable std::mutex mutex;
             std::vector<Measurement> measurements;
 
-            State(T_Queue queue, Config config) : queue{std::move(queue)}, config{std::move(config)}
+            State(T_Queue queue, Config config, Session session)
+                : queue{std::move(queue)}
+                , config{std::move(config)}
+                , session{std::move(session)}
             {
             }
         };
@@ -27,7 +32,12 @@ namespace alpakaMetrics
     public:
         using element_type = typename T_Queue::element_type;
 
-        Queue(T_Queue queue, Config config) : m_state{std::make_shared<State>(std::move(queue), std::move(config))}
+        Queue(T_Queue queue, Config config) : Queue{std::move(queue), std::move(config), Session{}}
+        {
+        }
+
+        Queue(T_Queue queue, Config config, Session session)
+            : m_state{std::make_shared<State>(std::move(queue), std::move(config), std::move(session))}
         {
             internal::validateConfig(m_state->config);
             if constexpr(!std::same_as<decltype(m_state->queue.getApi()), alpaka::api::Host>)
@@ -156,17 +166,23 @@ namespace alpakaMetrics
             m_state->measurements.clear();
         }
 
+        [[nodiscard]] Session getSession() const
+        {
+            return m_state->session;
+        }
+
     private:
         void record(Measurement const& measurement, OperationKind kind) const
         {
             measurement.get()->provenance
-                = {0,
+                = {m_state->session.getId(),
                    m_state->id,
                    kind,
                    m_state->queue.getName(),
                    m_state->queue.getDevice().getName(),
                    getApi().getName()};
             m_state->measurements.push_back(measurement);
+            static_cast<void>(m_state->session.track(measurement));
         }
 
         alpaka::onHost::Handle<State> m_state;
@@ -175,5 +191,10 @@ namespace alpakaMetrics
     auto makeQueue(internal::concepts::Queue auto queue, Config config = {})
     {
         return Queue<decltype(queue)>{std::move(queue), std::move(config)};
+    }
+
+    auto makeQueue(internal::concepts::Queue auto queue, Session session, Config config = {})
+    {
+        return Queue<decltype(queue)>{std::move(queue), std::move(config), std::move(session)};
     }
 } // namespace alpakaMetrics

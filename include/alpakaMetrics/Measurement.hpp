@@ -47,6 +47,15 @@ namespace alpakaMetrics
                 return *result;
             }
 
+            std::optional<Result> tryGetResults() const
+            {
+                std::unique_lock lock{mutex, std::try_to_lock};
+                if(!lock.owns_lock() || (!result && !failure && !isComplete()))
+                    return std::nullopt;
+                readResults();
+                return result;
+            }
+
             void wait()
             {
                 static_cast<void>(getResults());
@@ -81,6 +90,12 @@ namespace alpakaMetrics
         [[nodiscard]] Result getResults() const
         {
             return m_state->getResults();
+        }
+
+        /** Polls without waiting for queued work or another result reader. */
+        [[nodiscard]] std::optional<Result> tryGetResults() const
+        {
+            return m_state->tryGetResults();
         }
 
         void wait() const
