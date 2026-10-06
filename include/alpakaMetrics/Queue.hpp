@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
-#include "alpakaMetrics/internal/interface.hpp"
+#include <alpakaMetrics/internal/interface.hpp>
 
 #include <mutex>
 #include <vector>
@@ -15,6 +15,7 @@ namespace alpakaMetrics
         {
             T_Queue queue;
             Config config;
+            std::uint64_t id{internal::nextMeasurementId()};
             mutable std::mutex mutex;
             std::vector<Measurement> measurements;
 
@@ -101,7 +102,7 @@ namespace alpakaMetrics
             std::lock_guard lock{m_state->mutex};
             auto measurement
                 = internal::Enqueue::Op<decltype(getApi())>{}(m_state->queue, m_state->config, spec, bundle);
-            m_state->measurements.push_back(measurement);
+            record(measurement, OperationKind::kernel);
             return measurement;
         }
 
@@ -126,7 +127,7 @@ namespace alpakaMetrics
         {
             std::lock_guard lock{m_state->mutex};
             auto measurement = internal::enqueueHostTask(m_state->queue, m_state->config, task);
-            m_state->measurements.push_back(measurement);
+            record(measurement, OperationKind::hostTask);
             return measurement;
         }
 
@@ -156,6 +157,18 @@ namespace alpakaMetrics
         }
 
     private:
+        void record(Measurement const& measurement, OperationKind kind) const
+        {
+            measurement.get()->provenance
+                = {0,
+                   m_state->id,
+                   kind,
+                   m_state->queue.getName(),
+                   m_state->queue.getDevice().getName(),
+                   getApi().getName()};
+            m_state->measurements.push_back(measurement);
+        }
+
         alpaka::onHost::Handle<State> m_state;
     };
 

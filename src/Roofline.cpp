@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-#include "alpakaMetrics/Roofline.hpp"
+#include <alpakaMetrics/Roofline.hpp>
 
 #include <algorithm>
 #include <cmath>

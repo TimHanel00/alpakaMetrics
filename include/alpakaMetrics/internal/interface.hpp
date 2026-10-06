@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
-#include "alpakaMetrics/HostSideInstrumentation.hpp"
-#include "alpakaMetrics/Measurement.hpp"
-#include "alpakaMetrics/internal/Papi.hpp"
-
 #include <alpaka/alpaka.hpp>
+
+#include <alpakaMetrics/HostSideInstrumentation.hpp>
+#include <alpakaMetrics/Measurement.hpp>
+#include <alpakaMetrics/internal/Counters.hpp>
 
 #include <exception>
 #include <future>
@@ -204,7 +204,7 @@ namespace alpakaMetrics::internal
         T_Queue const& queue,
         Config const& config,
         T_Launch launch,
-        PapiCounters* counters = nullptr)
+        Counters* counters = nullptr)
     {
         if constexpr(std::same_as<decltype(queue.getTiming()), alpaka::timing::Enabled>)
         {
@@ -217,7 +217,7 @@ namespace alpakaMetrics::internal
             {
                 if(counters && counters->hasEvents())
                 {
-                    // PAPI GPU sets are thread-affine and cover a context/device, not a stream.
+                    // Synchronous collector sets are thread-affine and may cover a context/device.
                     // Finish preceding queue work before opening the counter interval.
                     alpaka::onHost::wait(queue);
                     counters->begin();
@@ -257,7 +257,7 @@ namespace alpakaMetrics::internal
                             MetricStatus::unsupportedScope,
                             "This queue backend has no native counter provider"));
             state->isComplete = [end] { return end.isComplete(); };
-            // Capture values, never a live PAPI event set. Results can be read on any thread.
+            // Capture values, never a live collector session. Results can be read on any thread.
             state->read
                 = [start, end, config, counterResults = std::move(counterResults), id = state->id, synchronized]
             {
@@ -294,7 +294,7 @@ namespace alpakaMetrics::internal
 
     template<concepts::Queue T_Queue, typename T_Launch>
     requires std::invocable<T_Launch const&>
-    Measurement enqueuePapiDevice(
+    Measurement enqueueNativeDevice(
         T_Queue const& queue,
         Config const& config,
         T_Launch launch,
@@ -304,7 +304,7 @@ namespace alpakaMetrics::internal
         // device first. Do not call profiling APIs from a GPU host callback.
         queue.enqueueNativeFn([](auto) {});
         auto const device = alpaka::onHost::getNativeHandle(queue.getDevice());
-        PapiCounters counters{config, DeviceCounterTarget{component, static_cast<std::uint32_t>(device)}};
+        Counters counters{config, DeviceCounterTarget{component, static_cast<std::uint32_t>(device)}};
         return enqueueDevice(queue, config, std::move(launch), &counters);
     }
 
@@ -333,7 +333,7 @@ namespace alpakaMetrics::internal
         Measurement operator()(T_Queue const& queue, Config const& config, T_Spec const& spec, T_Bundle const& bundle)
             const
         {
-            return enqueuePapiDevice(queue, config, [&] { queue.enqueue(spec, bundle); }, "cuda");
+            return enqueueNativeDevice(queue, config, [&] { queue.enqueue(spec, bundle); }, "cuda");
         }
     };
 
@@ -347,7 +347,7 @@ namespace alpakaMetrics::internal
         Measurement operator()(T_Queue const& queue, Config const& config, T_Spec const& spec, T_Bundle const& bundle)
             const
         {
-            return enqueuePapiDevice(queue, config, [&] { queue.enqueue(spec, bundle); }, "rocp_sdk");
+            return enqueueNativeDevice(queue, config, [&] { queue.enqueue(spec, bundle); }, "hip");
         }
     };
 } // namespace alpakaMetrics::internal

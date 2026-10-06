@@ -36,7 +36,8 @@ namespace
         alpaka::onHost::memset(raw, output, 0u);
         alpakaMetrics::Config config{
             .metrics = {alpakaMetrics::metric::elapsedTime, alpakaMetrics::metric::native(event)},
-            .label = "native-device"};
+            .label = "native-device",
+            .allowSynchronization = true};
         auto queue = alpakaMetrics::makeQueue(raw, config);
         auto spec = alpaka::onHost::FrameSpec{alpaka::Vec{4u}, alpaka::Vec{64u}, executor};
         auto first = queue.enqueue(spec, Work{}, output);

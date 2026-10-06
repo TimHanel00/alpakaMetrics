@@ -26,7 +26,8 @@ int main()
         auto device = alpaka::onHost::makeDeviceSelector(alpaka::api::host, alpaka::deviceKind::cpu).makeDevice(0u);
         auto queue = alpakaMetrics::makeQueue(device.makeQueue(alpaka::timing::enabled));
         auto config = alpakaTune::TunerConfig{};
-        config.mode = alpakaTune::TuningMode::onlineFixed;
+        config.exploration = alpakaTune::ExplorationPolicy::online;
+        config.selection = alpakaTune::SelectionPolicy::fixed;
         config.strategy = alpakaTune::StrategyKind::exhaustive;
         config.queue.reset();
         config.runsPerCandidate = 1u;

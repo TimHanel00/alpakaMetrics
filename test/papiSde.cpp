@@ -99,7 +99,7 @@ int main()
         queue.enqueueHostFn([&integers] { integers += 1000; });
         auto measurement = [&]
         {
-            alpakaMetrics::internal::PapiCounters counters{deviceConfig};
+            alpakaMetrics::internal::Counters counters{deviceConfig};
             return alpakaMetrics::internal::enqueueDevice(
                 queue,
                 deviceConfig,
@@ -125,7 +125,7 @@ int main()
         if(measurement.getResults().getMetric("sde:::alpakaMetricsTest::integers").asDouble() != 5.0)
             throw std::runtime_error{"Repeated measurement reads changed the native counter result"};
         {
-            alpakaMetrics::internal::PapiCounters counters{deviceConfig};
+            alpakaMetrics::internal::Counters counters{deviceConfig};
             bool threw{};
             try
             {

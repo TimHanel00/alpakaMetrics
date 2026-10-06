@@ -45,8 +45,10 @@ set_target_properties(
 
 add_library(
     alpakaMetrics
+    SHARED
     src/HostSideInstrumentation.cpp
-    src/Papi.cpp
+    src/Collector.cpp
+    src/Json.cpp
     src/Roofline.cpp
 )
 add_library(alpakaMetrics::alpakaMetrics ALIAS alpakaMetrics)
@@ -60,16 +62,36 @@ target_include_directories(
 target_link_libraries(
     alpakaMetrics
     PUBLIC alpakaMetrics::alpakaDependency Threads::Threads
+    PRIVATE ${CMAKE_DL_LIBS}
 )
-target_compile_definitions(
-    alpakaMetrics
-    PRIVATE ALPAKA_METRICS_HAS_PAPI=$<BOOL:${alpakaMetrics_DEP_PAPI}>
-)
+set_target_properties(alpakaMetrics PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+if(UNIX)
+    set_target_properties(alpakaMetrics PROPERTIES INSTALL_RPATH "$ORIGIN")
+endif()
 alpaka_finalize(alpakaMetrics)
 
 if(alpakaMetrics_DEP_PAPI)
     include(cmake/Papi.cmake)
-    target_link_libraries(alpakaMetrics PRIVATE PAPI::PAPI)
+    add_library(
+        alpakaMetrics_papi
+        MODULE
+        plugins/papi/Papi.cpp
+        plugins/papi/Plugin.cpp
+    )
+    target_compile_features(alpakaMetrics_papi PRIVATE cxx_std_20)
+    target_include_directories(
+        alpakaMetrics_papi
+        PRIVATE include plugins/papi/include
+    )
+    target_link_libraries(
+        alpakaMetrics_papi
+        PRIVATE PAPI::PAPI Threads::Threads
+    )
+    set_target_properties(alpakaMetrics_papi PROPERTIES INSTALL_RPATH "$ORIGIN")
+    install(
+        TARGETS alpakaMetrics_papi
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    )
 endif()
 
 if(alpakaMetrics_BUILD_TESTING)

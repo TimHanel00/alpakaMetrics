@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
-#include "alpakaMetrics/Result.hpp"
+#include <alpakaMetrics/Result.hpp>
 
 #include <string>
 #include <utility>
@@ -119,63 +119,70 @@ namespace alpakaMetrics
     struct MetricRequest
     {
         std::string name;
-        std::string papiName;
+        std::string nativeName;
         MetricUnit unit{MetricUnit::providerDefined};
         double scale{1.0};
+        /** Compatibility spelling; new code should use nativeName or metric::map(). */
+        std::string papiName;
+
+        [[nodiscard]] std::string const& getNativeName() const
+        {
+            return nativeName.empty() ? papiName : nativeName;
+        }
 
         MetricRequest(metric::ElapsedTime) : name{"elapsed_time"}
         {
         }
 
-        MetricRequest(metric::Cycles) : name{"cycles"}, papiName{"PAPI_TOT_CYC"}
+        MetricRequest(metric::Cycles) : name{"cycles"}
         {
         }
 
-        MetricRequest(metric::Instructions) : name{"instructions"}, papiName{"PAPI_TOT_INS"}
+        MetricRequest(metric::Instructions) : name{"instructions"}
         {
         }
 
-        MetricRequest(metric::FloatingPointOperations) : name{"floating_point_operations"}, papiName{"PAPI_FP_OPS"}
+        MetricRequest(metric::FloatingPointOperations) : name{"floating_point_operations"}
         {
         }
 
-        MetricRequest(metric::L2Misses) : name{"l2_misses"}, papiName{"PAPI_L2_TCM"}
+        MetricRequest(metric::L2Misses) : name{"l2_misses"}
         {
         }
 
-        MetricRequest(metric::L3Misses) : name{"l3_misses"}, papiName{"PAPI_L3_TCM"}
+        MetricRequest(metric::L3Misses) : name{"l3_misses"}
         {
         }
 
-        MetricRequest(metric::L1DataMisses) : name{"l1_data_misses"}, papiName{"PAPI_L1_DCM"}
+        MetricRequest(metric::L1DataMisses) : name{"l1_data_misses"}
         {
         }
 
-        MetricRequest(metric::L2Accesses) : name{"l2_accesses"}, papiName{"PAPI_L2_TCA"}
+        MetricRequest(metric::L2Accesses) : name{"l2_accesses"}
         {
         }
 
-        MetricRequest(metric::L3Accesses) : name{"l3_accesses"}, papiName{"PAPI_L3_TCA"}
+        MetricRequest(metric::L3Accesses) : name{"l3_accesses"}
         {
         }
 
-        MetricRequest(metric::BranchInstructions) : name{"branch_instructions"}, papiName{"PAPI_BR_INS"}
+        MetricRequest(metric::BranchInstructions) : name{"branch_instructions"}
         {
         }
 
-        MetricRequest(metric::BranchMispredictions) : name{"branch_mispredictions"}, papiName{"PAPI_BR_MSP"}
+        MetricRequest(metric::BranchMispredictions) : name{"branch_mispredictions"}
         {
         }
 
-        MetricRequest(metric::LoadInstructions) : name{"load_instructions"}, papiName{"PAPI_LD_INS"}
+        MetricRequest(metric::LoadInstructions) : name{"load_instructions"}
         {
         }
 
-        MetricRequest(metric::StoreInstructions) : name{"store_instructions"}, papiName{"PAPI_SR_INS"}
+        MetricRequest(metric::StoreInstructions) : name{"store_instructions"}
         {
         }
 
-        MetricRequest(metric::ResourceStallCycles) : name{"resource_stall_cycles"}, papiName{"PAPI_RES_STL"}
+        MetricRequest(metric::ResourceStallCycles) : name{"resource_stall_cycles"}
         {
         }
 
@@ -197,7 +204,7 @@ namespace alpakaMetrics
 
         MetricRequest(metric::Native request)
             : name{request.name}
-            , papiName{std::move(request.name)}
+            , nativeName{std::move(request.name)}
             , unit{request.unit}
             , scale{request.scale}
         {
@@ -209,7 +216,7 @@ namespace alpakaMetrics
         /** Bind a semantic metric to a provider event, with an explicit unit and conversion. */
         inline MetricRequest map(MetricRequest request, Native source)
         {
-            request.papiName = std::move(source.name);
+            request.nativeName = std::move(source.name);
             request.unit = source.unit;
             request.scale = source.scale;
             return request;
@@ -223,5 +230,9 @@ namespace alpakaMetrics
         std::string label;
         /** providerDefined permits native component scopes; callingThread restricts to CPU thread counters. */
         MetricScope counterScope{MetricScope::providerDefined};
+        /** Empty selects the environment override or the installed default collector. */
+        std::string collectorPlugin;
+        /** Permit providers that must wait around device counter collection. */
+        bool allowSynchronization{false};
     };
 } // namespace alpakaMetrics
