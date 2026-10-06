@@ -17,9 +17,27 @@ idle gaps between markers. They are not kernel-exclusive durations. Device queue
 must enable timing. Submissions through the underlying queue bypass measurement.
 Kernels are launched once; no automatic replay or multiplexing is performed.
 
-`Measurement::getResults()` waits and caches a snapshot, propagating operation
-failures. Retained handles survive queue history clearing. Host regions must
-begin/end on the same thread; CPU counters exclude other threads.
+`Measurement::getResults()` waits and caches a snapshot. `tryGetResults()` returns
+an empty optional if work is pending or another reader holds the result lock.
+Both propagate operation failures. Retained handles survive queue history clearing.
+Host regions must begin/end on the same thread; CPU counters exclude other threads.
+
+`Session` polls completion on a background progress thread, without synchronizing
+each submission. Completed operations can be delivered before earlier operations
+on other queues. `drain()` waits for tracked submissions that preceded the call,
+including callback delivery. It does not wait for submissions dropped from the
+stream because of pending-capacity overflow; their direct handles still work.
+Destroying the last session/queue owner cancels pending stream delivery.
+
+Session defaults retain up to 4096 pending and 4096 completed handles. Configure
+these limits with `SessionConfig`; `getStats()` reports overflow and delivery
+failures. A full pending buffer declines delivery without waiting. A full completed
+buffer discards its oldest handle. Callbacks still receive completed tracked
+operations. The queue's separate history is retained until `clearMeasurements()`.
+Callbacks execute outside queue/session locks; a slow callback delays progress for
+other sessions. Keep captured objects alive through `drain()` and avoid ownership
+cycles when capturing a session in its own callback. Callback exceptions are
+reported in session statistics and do not invalidate direct result handles.
 
 ## Counter mappings
 

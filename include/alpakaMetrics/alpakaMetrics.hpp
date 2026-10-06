@@ -9,3 +9,4 @@
 #include <alpakaMetrics/Queue.hpp>
 #include <alpakaMetrics/Result.hpp>
 #include <alpakaMetrics/Roofline.hpp>
+#include <alpakaMetrics/Session.hpp>
