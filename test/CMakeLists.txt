@@ -118,3 +118,70 @@ foreach(_header IN LISTS _headers)
     target_link_libraries(header_${_name} PRIVATE alpakaMetrics::alpakaMetrics)
     alpaka_finalize(header_${_name})
 endforeach()
+
+# Independent modules exercise the public ABI without linking the core or PAPI.
+add_library(alpakaMetrics_testCollector MODULE collectorPlugin.cpp)
+target_compile_features(alpakaMetrics_testCollector PRIVATE cxx_std_20)
+target_include_directories(
+    alpakaMetrics_testCollector
+    PRIVATE ${PROJECT_SOURCE_DIR}/include
+)
+add_library(alpakaMetrics_badCollector MODULE collectorPlugin.cpp)
+target_compile_features(alpakaMetrics_badCollector PRIVATE cxx_std_20)
+target_include_directories(
+    alpakaMetrics_badCollector
+    PRIVATE ${PROJECT_SOURCE_DIR}/include
+)
+target_compile_definitions(
+    alpakaMetrics_badCollector
+    PRIVATE ALPAKA_METRICS_BAD_ABI=1
+)
+add_executable(alpakaMetrics_collectors collectors.cpp)
+target_link_libraries(
+    alpakaMetrics_collectors
+    PRIVATE alpakaMetrics::alpakaMetrics
+)
+alpaka_finalize(alpakaMetrics_collectors)
+add_dependencies(
+    alpakaMetrics_collectors
+    alpakaMetrics_testCollector
+    alpakaMetrics_badCollector
+)
+add_test(
+    NAME alpakaMetrics.collectors
+    COMMAND
+        alpakaMetrics_collectors $<TARGET_FILE:alpakaMetrics_testCollector>
+        $<TARGET_FILE:alpakaMetrics_badCollector>
+)
+set_tests_properties(alpakaMetrics.collectors PROPERTIES TIMEOUT 30)
+
+target_compile_definitions(
+    alpakaMetrics_deviceCounters
+    PRIVATE ALPAKA_METRICS_TEST_PAPI=$<BOOL:${alpakaMetrics_DEP_PAPI}>
+)
+
+if(TARGET alpakaMetrics_papi)
+    foreach(
+        _test
+        contracts
+        deviceCounters
+        deviceExecution
+        papiSde
+        collectors
+        tunerIntegration
+    )
+        if(TARGET alpakaMetrics_${_test})
+            add_dependencies(alpakaMetrics_${_test} alpakaMetrics_papi)
+        endif()
+    endforeach()
+endif()
+
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    add_test(
+        NAME alpakaMetrics.json
+        COMMAND
+            ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/jsonRoundTrip.py
+            $<TARGET_FILE:alpakaMetrics_collectors>
+    )
+endif()

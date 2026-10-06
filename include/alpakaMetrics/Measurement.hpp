@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
-#include "alpakaMetrics/Result.hpp"
-
 #include <alpaka/onHost/Handle.hpp>
 
+#include <alpakaMetrics/Result.hpp>
+
+#include <exception>
 #include <functional>
 #include <mutex>
 
@@ -19,12 +20,30 @@ namespace alpakaMetrics
             std::function<Result()> read;
             mutable std::mutex mutex;
             mutable std::optional<Result> result;
+            mutable std::exception_ptr failure;
+            OperationProvenance provenance;
+
+            void readResults() const
+            {
+                if(failure)
+                    std::rethrow_exception(failure);
+                if(!result)
+                    try
+                    {
+                        result = read();
+                        result->provenance = provenance;
+                    }
+                    catch(...)
+                    {
+                        failure = std::current_exception();
+                        throw;
+                    }
+            }
 
             Result getResults() const
             {
                 std::lock_guard lock{mutex};
-                if(!result)
-                    result = read();
+                readResults();
                 return *result;
             }
 

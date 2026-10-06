@@ -16,6 +16,9 @@ namespace
     void checkRouting()
     {
         using namespace alpakaMetrics;
+#if !ALPAKA_METRICS_TEST_PAPI
+        return; // Routing rules are owned by the optional PAPI module.
+#endif
         for(auto const component : {"cuda", "rocp_sdk"})
         {
             Config config{
@@ -25,8 +28,9 @@ namespace
                    metric::native(std::string{component} + ":::invalid:device=7"),
                    metric::native(std::string{component} + ":::invalid:device=bad"),
                    metric::native(std::string{component} + ":::invalid:device=0:device=0"),
-                   metric::native(std::string{component} + ":::invalid")}};
-            internal::PapiCounters counters{config, internal::DeviceCounterTarget{component, 0u}};
+                   metric::native(std::string{component} + ":::invalid")},
+                .allowSynchronization = true};
+            internal::Counters counters{config, internal::DeviceCounterTarget{component, 0u}};
             check(!counters.hasEvents() && !counters.isRunning(), "Invalid device events started collection");
             counters.begin();
             auto results = counters.end();
@@ -39,8 +43,11 @@ namespace
                 results.back().descriptor.nativeName == std::string{component} + ":::invalid:device=0",
                 "Implicit native device selection was lost");
         }
-        internal::PapiCounters scoped{
-            Config{.metrics = {metric::native("cuda:::invalid")}, .counterScope = MetricScope::callingThread},
+        internal::Counters scoped{
+            Config{
+                .metrics = {metric::native("cuda:::invalid")},
+                .counterScope = MetricScope::callingThread,
+                .allowSynchronization = true},
             internal::DeviceCounterTarget{"cuda", 0u}};
         check(
             scoped.end().at(0u).status == MetricStatus::unsupportedScope,
@@ -49,17 +56,17 @@ namespace
         // A native component lookup claims a process-wide lease, even if the
         // requested event is unavailable. Nested regions must not enter that
         // component concurrently, including on the same thread.
-        Config native{.metrics = {metric::native("cuda:::invalid")}};
+        Config native{.metrics = {metric::native("cuda:::invalid")}, .allowSynchronization = true};
         {
-            internal::PapiCounters outer{native, internal::DeviceCounterTarget{"cuda", 0u}};
-            internal::PapiCounters nested{native, internal::DeviceCounterTarget{"cuda", 0u}};
+            internal::Counters outer{native, internal::DeviceCounterTarget{"cuda", 0u}};
+            internal::Counters nested{native, internal::DeviceCounterTarget{"cuda", 0u}};
             auto const status = nested.end().at(0u).status;
             check(
                 status == MetricStatus::conflicting || status == MetricStatus::dependencyDisabled
                     || outer.end().at(0u).status == MetricStatus::collectionFailed,
                 "Nested native component lookup did not report a conflict");
         }
-        internal::PapiCounters after{native, internal::DeviceCounterTarget{"cuda", 0u}};
+        internal::Counters after{native, internal::DeviceCounterTarget{"cuda", 0u}};
         check(
             after.end().at(0u).status != MetricStatus::conflicting,
             "Completed native region retained its process-wide lease");
@@ -75,7 +82,7 @@ namespace
         // Block real queue work to prove enqueue does not wait when counters are unavailable.
         queue.enqueueHostFn([ready] { ready.wait(); });
         Config config{.metrics = {metric::native("cuda:::invalid")}};
-        internal::PapiCounters counters{config, internal::DeviceCounterTarget{"cuda", 0u}};
+        internal::Counters counters{config, internal::DeviceCounterTarget{"cuda", 0u}};
         std::uint64_t launches{};
         auto measurement = internal::enqueueDevice(
             queue,

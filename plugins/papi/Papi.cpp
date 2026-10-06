@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
-#include "alpakaMetrics/internal/Papi.hpp"
+#include <alpakaMetrics/plugin/papi/PapiSession.hpp>
+#include <papi.h>
 
 #include <algorithm>
 #include <atomic>
@@ -10,16 +11,12 @@
 #include <mutex>
 #include <thread>
 
-#if ALPAKA_METRICS_HAS_PAPI
-#    include <papi.h>
-#endif
-
-namespace alpakaMetrics::internal
+namespace alpakaMetrics::papi
 {
-    struct PapiCounters::Impl
+    struct PapiSession::Impl
     {
         std::vector<MetricResult> results;
-#if ALPAKA_METRICS_HAS_PAPI
+
         struct Group
         {
             int component{};
@@ -59,7 +56,6 @@ namespace alpakaMetrics::internal
         std::vector<Group> groups;
         DeviceLease deviceLease;
         std::thread::id owner{std::this_thread::get_id()};
-#endif
     };
 
     namespace
@@ -75,25 +71,25 @@ namespace alpakaMetrics::internal
             if(target.component != "cuda" && target.component != "rocp_sdk")
                 return reject("No device counter provider for this API");
             auto const prefix = std::string{target.component} + ":::";
-            if(!request.papiName.starts_with(prefix))
+            if(!request.nativeName.starts_with(prefix))
                 return reject("Device queue counters require an explicit " + prefix + " native mapping");
-            auto const qualifier = request.papiName.find(":device=");
+            auto const qualifier = request.nativeName.find(":device=");
             if(qualifier == std::string::npos)
-                request.papiName += ":device=" + std::to_string(target.device);
+                request.nativeName += ":device=" + std::to_string(target.device);
             else
             {
                 auto const begin = qualifier + std::string_view{":device="}.size();
-                auto const end = request.papiName.find(':', begin);
+                auto const end = request.nativeName.find(':', begin);
                 std::string_view number{
-                    request.papiName.data() + begin,
-                    (end == std::string::npos ? request.papiName.size() : end) - begin};
+                    request.nativeName.data() + begin,
+                    (end == std::string::npos ? request.nativeName.size() : end) - begin};
                 std::uint32_t device{};
                 auto const parsed = std::from_chars(number.data(), number.data() + number.size(), device);
                 if(parsed.ec != std::errc{} || parsed.ptr != number.data() + number.size() || device != target.device
-                   || request.papiName.find(":device=", begin) != std::string::npos)
+                   || request.nativeName.find(":device=", begin) != std::string::npos)
                     return reject("Native event device qualifier does not match the queue device");
             }
-            result.descriptor.nativeName = request.papiName;
+            result.descriptor.nativeName = request.nativeName;
             if(target.component == "rocp_sdk")
             {
                 if(std::getenv("PAPI_ROCP_SDK_DISPATCH_MODE"))
@@ -108,7 +104,6 @@ namespace alpakaMetrics::internal
         }
     } // namespace
 
-#if ALPAKA_METRICS_HAS_PAPI
     namespace
     {
         std::atomic_flag& deviceCounterGate()
@@ -206,23 +201,42 @@ namespace alpakaMetrics::internal
                 info.units};
         }
     } // namespace
-#endif
 
-    PapiCounters::PapiCounters(Config const& config, std::optional<DeviceCounterTarget> target)
+    PapiSession::PapiSession(Config const& config, std::optional<DeviceCounterTarget> target)
         : m_impl{std::make_unique<Impl>()}
     {
         std::vector<MetricRequest> requests;
         std::vector<bool> eligible;
         std::vector<bool> mapped;
-        for(auto const& request : config.metrics)
+        for(auto request : config.metrics)
         {
+            if(request.nativeName.empty())
+            {
+                static constexpr std::pair<std::string_view, std::string_view> presets[]
+                    = {{"cycles", "PAPI_TOT_CYC"},
+                       {"instructions", "PAPI_TOT_INS"},
+                       {"floating_point_operations", "PAPI_FP_OPS"},
+                       {"l2_misses", "PAPI_L2_TCM"},
+                       {"l3_misses", "PAPI_L3_TCM"},
+                       {"l1_data_misses", "PAPI_L1_DCM"},
+                       {"l2_accesses", "PAPI_L2_TCA"},
+                       {"l3_accesses", "PAPI_L3_TCA"},
+                       {"branch_instructions", "PAPI_BR_INS"},
+                       {"branch_mispredictions", "PAPI_BR_MSP"},
+                       {"load_instructions", "PAPI_LD_INS"},
+                       {"store_instructions", "PAPI_SR_INS"},
+                       {"resource_stall_cycles", "PAPI_RES_STL"}};
+                for(auto const& [name, event] : presets)
+                    if(request.name == name)
+                        request.nativeName = event;
+            }
             if(request.name == "elapsed_time")
                 continue;
             m_impl->results.push_back(
                 makeUnavailable(request, MetricStatus::unsupported, "No semantic mapping for this metric"));
             requests.push_back(request);
-            mapped.push_back(request.name != request.papiName);
-            bool accepted = !request.papiName.empty();
+            mapped.push_back(request.name != request.nativeName);
+            bool accepted = !request.nativeName.empty();
             if(target && accepted)
             {
                 if(config.counterScope == MetricScope::callingThread)
@@ -237,7 +251,6 @@ namespace alpakaMetrics::internal
             }
             eligible.push_back(accepted);
         }
-#if ALPAKA_METRICS_HAS_PAPI
         bool const needsPapi = std::any_of(eligible.begin(), eligible.end(), [](bool value) { return value; });
         int initialized = needsPapi ? initialize() : PAPI_OK;
         if(needsPapi && initialized == PAPI_OK)
@@ -256,7 +269,7 @@ namespace alpakaMetrics::internal
             // Acquire before touching the component's event-set state. An atomic
             // lease also rejects nested regions on the same thread without relying
             // on recursive locking or invoking try_lock() on an owned mutex.
-            if((request.papiName.starts_with("cuda:::") || request.papiName.starts_with("rocp_sdk:::"))
+            if((request.nativeName.starts_with("cuda:::") || request.nativeName.starts_with("rocp_sdk:::"))
                && !m_impl->deviceLease.acquire(deviceCounterGate()))
             {
                 result.status = MetricStatus::conflicting;
@@ -264,7 +277,7 @@ namespace alpakaMetrics::internal
                 continue;
             }
             int code{};
-            int error = PAPI_event_name_to_code(const_cast<char*>(request.papiName.c_str()), &code);
+            int error = PAPI_event_name_to_code(const_cast<char*>(request.nativeName.c_str()), &code);
             PAPI_event_info_t info{};
             if(error == PAPI_OK)
                 error = PAPI_get_event_info(code, &info);
@@ -331,46 +344,26 @@ namespace alpakaMetrics::internal
                 result.diagnostic.clear();
             }
         }
-#else
-        for(std::size_t index = 0u; index < requests.size(); ++index)
-        {
-            auto& result = m_impl->results[index];
-            if(eligible[index])
-            {
-                result.status = MetricStatus::dependencyDisabled;
-                result.diagnostic = "Built with alpakaMetrics_DEP_PAPI=OFF";
-            }
-        }
-#endif
     }
 
-    bool PapiCounters::hasEvents() const
+    bool PapiSession::hasEvents() const
     {
-#if ALPAKA_METRICS_HAS_PAPI
         return std::any_of(
             m_impl->groups.begin(),
             m_impl->groups.end(),
             [](auto const& group) { return !group.resultIndices.empty(); });
-#else
-        return false;
-#endif
     }
 
-    bool PapiCounters::isRunning() const
+    bool PapiSession::isRunning() const
     {
-#if ALPAKA_METRICS_HAS_PAPI
         return std::any_of(
             m_impl->groups.begin(),
             m_impl->groups.end(),
             [](auto const& group) { return group.running; });
-#else
-        return false;
-#endif
     }
 
-    PapiCounters::~PapiCounters()
+    PapiSession::~PapiSession()
     {
-#if ALPAKA_METRICS_HAS_PAPI
         // Event sets belong to the creating thread. Active host instrumentation is thread-affine.
         if(m_impl->owner != std::this_thread::get_id())
             return;
@@ -386,12 +379,10 @@ namespace alpakaMetrics::internal
             PAPI_cleanup_eventset(group.eventSet);
             PAPI_destroy_eventset(&group.eventSet);
         }
-#endif
     }
 
-    void PapiCounters::begin()
+    void PapiSession::begin()
     {
-#if ALPAKA_METRICS_HAS_PAPI
         for(auto& group : m_impl->groups)
         {
             if(group.resultIndices.empty())
@@ -402,12 +393,10 @@ namespace alpakaMetrics::internal
                 for(auto index : group.resultIndices)
                     setFailure(m_impl->results[index], error);
         }
-#endif
     }
 
-    std::vector<MetricResult> PapiCounters::end()
+    std::vector<MetricResult> PapiSession::end()
     {
-#if ALPAKA_METRICS_HAS_PAPI
         static_assert(sizeof(long long) == sizeof(std::int64_t));
         for(auto& group : m_impl->groups)
         {
@@ -441,14 +430,12 @@ namespace alpakaMetrics::internal
                 }
             }
         }
-#endif
         return m_impl->results;
     }
 
-    std::vector<MetricDescriptor> PapiCounters::getAvailableMetrics()
+    std::vector<MetricDescriptor> PapiSession::getAvailableMetrics()
     {
         std::vector<MetricDescriptor> descriptors;
-#if ALPAKA_METRICS_HAS_PAPI
         if(initialize() != PAPI_OK)
             return descriptors;
         int code = PAPI_PRESET_MASK;
@@ -475,7 +462,6 @@ namespace alpakaMetrics::internal
                 error = PAPI_enum_cmp_event(&code, PAPI_ENUM_EVENTS, component);
             }
         }
-#endif
         return descriptors;
     }
-} // namespace alpakaMetrics::internal
+} // namespace alpakaMetrics::papi

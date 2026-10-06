@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
-#include "alpakaMetrics/HostSideInstrumentation.hpp"
-
-#include "alpakaMetrics/internal/Papi.hpp"
+#include <alpakaMetrics/HostSideInstrumentation.hpp>
+#include <alpakaMetrics/internal/Counters.hpp>
 
 #include <atomic>
 #include <cmath>
@@ -28,9 +27,9 @@ namespace alpakaMetrics::internal
                 throw std::invalid_argument{"Metric names must be non-empty and unique"};
             if(!std::isfinite(request.scale) || request.scale <= 0.0)
                 throw std::invalid_argument{"Metric conversion scale must be finite and positive"};
-            if(request.name == "elapsed_time" && (!request.papiName.empty() || request.scale != 1.0))
+            if(request.name == "elapsed_time" && (!request.getNativeName().empty() || request.scale != 1.0))
                 throw std::invalid_argument{"Elapsed time cannot be rebound to a counter"};
-            if(!request.papiName.empty())
+            if(!request.getNativeName().empty())
             {
                 auto expected = MetricUnit::count;
                 if(request.name == "energy")
@@ -41,7 +40,7 @@ namespace alpakaMetrics::internal
                     expected = MetricUnit::ratio;
                 else if(request.name == "transferred_bytes")
                     expected = MetricUnit::bytes;
-                if(request.name != request.papiName && request.unit != MetricUnit::providerDefined
+                if(request.name != request.getNativeName() && request.unit != MetricUnit::providerDefined
                    && request.unit != expected)
                     throw std::invalid_argument{"Native mapping unit does not match the semantic metric"};
                 if(expected != MetricUnit::count && request.unit == MetricUnit::providerDefined)
@@ -54,7 +53,7 @@ namespace alpakaMetrics::internal
     {
         return {
             {request.name,
-             request.papiName,
+             request.getNativeName(),
              {},
              "none",
              request.unit,
@@ -79,11 +78,12 @@ namespace alpakaMetrics::internal
             std::lock_guard lock{m_mutex};
             if(m_active)
                 throw std::logic_error{"Host instrumentation is already active"};
-            m_counters = std::make_unique<PapiCounters>(m_config);
+            m_counters = std::make_unique<Counters>(m_config);
             m_counters->begin();
             m_result = {};
             m_result.measurementId = nextMeasurementId();
             m_result.label = m_config.label;
+            m_result.provenance.api = "Host";
             m_result.begin = std::chrono::steady_clock::now();
             m_thread = std::this_thread::get_id();
             m_active = true;
@@ -139,7 +139,7 @@ namespace alpakaMetrics::internal
     private:
         Config m_config;
         mutable std::mutex m_mutex;
-        std::unique_ptr<PapiCounters> m_counters;
+        std::unique_ptr<Counters> m_counters;
         std::thread::id m_thread;
         bool m_active{};
         bool m_hasResult{};
@@ -178,7 +178,7 @@ namespace alpakaMetrics
 
     std::vector<MetricDescriptor> HostSideInstrumentation::getAvailableMetrics()
     {
-        auto result = internal::PapiCounters::getAvailableMetrics();
+        auto result = internal::Counters::getAvailableMetrics();
         result.insert(
             result.begin(),
             {"elapsed_time",

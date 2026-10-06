@@ -12,7 +12,7 @@
 
 namespace alpakaMetrics
 {
-    enum class MetricStatus
+    enum class MetricStatus : std::uint32_t
     {
         available,
         unsupported,
@@ -22,7 +22,7 @@ namespace alpakaMetrics
         unsupportedScope,
         collectionFailed
     };
-    enum class MetricScope
+    enum class MetricScope : std::uint32_t
     {
         hostRegion,
         callingThread,
@@ -32,7 +32,7 @@ namespace alpakaMetrics
         context,
         providerDefined
     };
-    enum class MetricUnit
+    enum class MetricUnit : std::uint32_t
     {
         seconds,
         count,
@@ -55,6 +55,9 @@ namespace alpakaMetrics
         MetricScope scope{MetricScope::providerDefined};
         std::string nativeUnit;
         double nativeToValueScale{1.0};
+        std::string collector;
+        std::string collectorVersion;
+        std::string collectorPath;
     };
 
     struct MetricResult
@@ -77,6 +80,23 @@ namespace alpakaMetrics
         }
     };
 
+    enum class OperationKind : std::uint32_t
+    {
+        hostRegion,
+        kernel,
+        hostTask
+    };
+
+    struct OperationProvenance
+    {
+        std::uint64_t sessionId{};
+        std::uint64_t queueId{};
+        OperationKind kind{OperationKind::hostRegion};
+        std::string queueName;
+        std::string deviceName;
+        std::string api;
+    };
+
     struct Result
     {
         std::uint64_t measurementId{};
@@ -87,6 +107,7 @@ namespace alpakaMetrics
         std::uint32_t passCount{1u};
         std::chrono::steady_clock::time_point begin;
         std::chrono::steady_clock::time_point end;
+        OperationProvenance provenance;
 
         [[nodiscard]] MetricResult const& getMetric(std::string_view name) const
         {

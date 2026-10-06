@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 #pragma once
 
-#include "alpakaMetrics/Config.hpp"
-#include "alpakaMetrics/Result.hpp"
+#include <alpakaMetrics/Config.hpp>
+#include <alpakaMetrics/Result.hpp>
 
 #include <memory>
 
