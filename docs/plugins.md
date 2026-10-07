@@ -7,16 +7,19 @@ alpakaMetrics owns Alpaka 3 operation identity, queue integration, completion
 tracking and direct results. Collectors own event selection, units, scopes and
 collection errors. Export consumes completed results independently.
 
-The core library has no PAPI link dependency. Enabling `alpakaMetrics_DEP_PAPI`
-builds `libalpakaMetrics_papi.so`, which privately links PAPI. Bundled installations
-place the module and its PAPI runtime beside the core library. The module can be
-removed without disabling timing; requested counters then report unavailable.
+The core is header-only and has no PAPI link dependency. Enabling
+`alpakaMetrics_DEP_PAPI` builds `libalpakaMetrics_papi.so`, which privately links PAPI. Bundled installations
+place the module and its PAPI runtime in the installation library directory.
+The module can be removed without disabling timing; requested counters then report unavailable.
 
 Collector selection, in priority order:
 
 1. `Config::collectorPlugin`, an explicit module path.
 2. `ALPAKA_METRICS_COLLECTOR_PLUGIN`, an environment override.
-3. `libalpakaMetrics_papi.so` beside the loaded core library.
+3. `libalpakaMetrics_papi.so` beside the application, in its parent directory,
+   in the configured installation library directory relative to that parent,
+   or on the platform library search paths. For applications installed elsewhere,
+   select the module explicitly or configure the library search path.
 
 `getCollectorInfo(path)` and `getAvailableMetrics(path)` inspect an explicit
 collector. Invalid explicit selections produce per-metric `collectionFailed`

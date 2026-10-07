@@ -10,20 +10,25 @@ separating instrumentation from measurement providers and output.
 
 alpakaMetrics focuses on **Alpaka 3 operation tracking and extensible measurements
 for online tuning**. It retains direct result handles and queue integration.
-PAPI is an optional collector plugin.
+The core is header-only; PAPI is an optional compiled collector plugin.
 
 ## Build
 
 ```sh
 cmake -S . -B build -G Ninja \
   -DalpakaMetrics_BUILD_TESTING=ON \
-  -DalpakaMetrics_BUILD_EXAMPLES=ON
+  -DalpakaMetrics_BUILD_EXAMPLES=ON \
+  -Dalpaka_FAST_MATH=OFF -Dalpaka_FTZ=OFF
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+The floating-point options preserve non-finite checks and subnormal inputs in
+result validation.
+
 Alpaka and bundled PAPI revisions are pinned. PAPI is ON by default; disable its
-plugin with `-DalpakaMetrics_DEP_PAPI=OFF`. The core has no PAPI link dependency.
+plugin with `-DalpakaMetrics_DEP_PAPI=OFF`. The `alpakaMetrics::alpakaMetrics`
+interface target has no compiled library or PAPI link dependency.
 Bundled PAPI requires Linux and Autotools; installed PAPI can be selected with
 `-DalpakaMetrics_USE_SYSTEM_PAPI=ON`. Additional components use, for example,
 `'-DalpakaMetrics_PAPI_COMPONENTS=sde;rapl'`. GPU components require vendor SDKs.
@@ -84,7 +89,9 @@ non-blocking queues.
 `metric::map()` binds semantic metrics to native counters and explicit conversions.
 Discovery is available through `getAvailableMetrics()` and `getCollectorInfo()`.
 Collectors can be selected with `Config::collectorPlugin` or
-`ALPAKA_METRICS_COLLECTOR_PLUGIN`; the default module lives beside the core library.
+`ALPAKA_METRICS_COLLECTOR_PLUGIN`. The default search checks beside the application,
+its parent directory, the installation library directory relative to that parent,
+and the platform library search paths.
 Runtime module loading currently supports POSIX platforms.
 
 JSON export is explicit: `toJson(result)` returns a string and writes no files.

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 #include <alpakaMetrics/alpakaMetrics.hpp>
 
+#include <filesystem>
 #include <future>
 #include <iostream>
 #include <limits>
@@ -18,6 +19,9 @@ namespace
         using namespace alpakaMetrics;
         auto info = getCollectorInfo(path);
         check(info.name == "test" && info.version == "1" && info.path == path, "Collector identity missing");
+        check(
+            getCollectorInfo(std::filesystem::relative(path).string()).path == info.path,
+            "Relative collector path changed identity");
         check(getAvailableMetrics(path).at(0).collector == "test", "Discovery lost collector identity");
         for(auto const& unavailable : {badPath, path + ".missing"})
         {

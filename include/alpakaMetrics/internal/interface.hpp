@@ -8,7 +8,9 @@
 #include <alpakaMetrics/internal/Counters.hpp>
 
 #include <exception>
+#include <functional>
 #include <future>
+#include <optional>
 
 namespace alpakaMetrics::internal
 {
@@ -204,7 +206,7 @@ namespace alpakaMetrics::internal
         T_Queue const& queue,
         Config const& config,
         T_Launch launch,
-        Counters* counters = nullptr)
+        std::optional<std::reference_wrapper<Counters>> counters = std::nullopt)
     {
         if constexpr(std::same_as<decltype(queue.getTiming()), alpaka::timing::Enabled>)
         {
@@ -215,13 +217,13 @@ namespace alpakaMetrics::internal
             bool synchronized = false;
             try
             {
-                if(counters && counters->hasEvents())
+                if(counters && counters->get().hasEvents())
                 {
                     // Synchronous collector sets are thread-affine and may cover a context/device.
                     // Finish preceding queue work before opening the counter interval.
                     alpaka::onHost::wait(queue);
-                    counters->begin();
-                    synchronized = counters->isRunning();
+                    counters->get().begin();
+                    synchronized = counters->get().isRunning();
                 }
                 queue.enqueue(start);
                 launch();
@@ -233,12 +235,12 @@ namespace alpakaMetrics::internal
             {
                 // A launch can fail after partially submitting work. Complete it before
                 // dismantling the profiling session, and preserve the original exception.
-                if(counters && counters->isRunning())
+                if(counters && counters->get().isRunning())
                 {
                     try
                     {
                         alpaka::onHost::wait(queue);
-                        static_cast<void>(counters->end());
+                        static_cast<void>(counters->get().end());
                     }
                     catch(...)
                     {
@@ -248,7 +250,7 @@ namespace alpakaMetrics::internal
             }
             std::vector<MetricResult> counterResults;
             if(counters)
-                counterResults = counters->end();
+                counterResults = counters->get().end();
             else
                 for(auto const& request : config.metrics)
                     if(request.name != "elapsed_time")
@@ -305,7 +307,7 @@ namespace alpakaMetrics::internal
         queue.enqueueNativeFn([](auto) {});
         auto const device = alpaka::onHost::getNativeHandle(queue.getDevice());
         Counters counters{config, DeviceCounterTarget{component, static_cast<std::uint32_t>(device)}};
-        return enqueueDevice(queue, config, std::move(launch), &counters);
+        return enqueueDevice(queue, config, std::move(launch), std::ref(counters));
     }
 
     /** Portable timing fallback for APIs without a native counter provider. */

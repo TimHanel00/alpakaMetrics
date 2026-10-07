@@ -88,7 +88,7 @@ namespace
             queue,
             config,
             [&] { queue.enqueueHostFn([&launches] { ++launches; }); },
-            &counters);
+            std::ref(counters));
         check(!measurement.isComplete(), "Unavailable counters synchronized the queue");
         auto read = std::async(std::launch::async, [measurement] { return measurement.getResults(); });
         auto const premature = read.wait_for(std::chrono::milliseconds{20}) == std::future_status::ready;
