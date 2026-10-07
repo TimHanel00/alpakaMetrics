@@ -112,7 +112,7 @@ int main()
                             ++launches;
                         });
                 },
-                &counters);
+                std::ref(counters));
         }();
         // The thread-affine event set has already been destroyed. Reading the
         // retained snapshot from another thread must still work.
@@ -137,7 +137,7 @@ int main()
                         queue.enqueueHostFn([&integers] { integers += 2; });
                         throw std::runtime_error{"launch failure"};
                     },
-                    &counters));
+                    std::ref(counters)));
             }
             catch(std::runtime_error const& error)
             {

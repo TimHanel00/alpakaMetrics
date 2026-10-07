@@ -211,3 +211,17 @@ if(Python3_Interpreter_FOUND)
             $<TARGET_FILE:alpakaMetrics_collectors>
     )
 endif()
+
+# Separate translation units verify inline linkage and process-wide shared state.
+add_executable(alpakaMetrics_headerOnly headerOnly.cpp headerOnlySupport.cpp)
+target_include_directories(
+    alpakaMetrics_headerOnly
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(
+    alpakaMetrics_headerOnly
+    PRIVATE alpakaMetrics::alpakaMetrics
+)
+alpaka_finalize(alpakaMetrics_headerOnly)
+add_test(NAME alpakaMetrics.headerOnly COMMAND alpakaMetrics_headerOnly)
+set_tests_properties(alpakaMetrics.headerOnly PROPERTIES TIMEOUT 30)

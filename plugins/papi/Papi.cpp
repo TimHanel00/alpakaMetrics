@@ -13,51 +13,6 @@
 
 namespace alpakaMetrics::papi
 {
-    struct PapiSession::Impl
-    {
-        std::vector<MetricResult> results;
-
-        struct Group
-        {
-            int component{};
-            int eventSet{PAPI_NULL};
-            int error{PAPI_OK};
-            bool running{};
-            std::vector<std::size_t> resultIndices;
-            std::vector<int> dataTypes;
-            std::vector<double> scales;
-        };
-
-        struct DeviceLease
-        {
-            std::atomic_flag* gate{};
-
-            DeviceLease() = default;
-            DeviceLease(DeviceLease const&) = delete;
-            DeviceLease& operator=(DeviceLease const&) = delete;
-
-            ~DeviceLease()
-            {
-                if(gate)
-                    gate->clear(std::memory_order_release);
-            }
-
-            bool acquire(std::atomic_flag& candidate)
-            {
-                if(gate)
-                    return true;
-                if(candidate.test_and_set(std::memory_order_acquire))
-                    return false;
-                gate = &candidate;
-                return true;
-            }
-        };
-
-        std::vector<Group> groups;
-        DeviceLease deviceLease;
-        std::thread::id owner{std::this_thread::get_id()};
-    };
-
     namespace
     {
         bool bindDeviceRequest(MetricRequest& request, DeviceCounterTarget target, MetricResult& result)
@@ -203,7 +158,6 @@ namespace alpakaMetrics::papi
     } // namespace
 
     PapiSession::PapiSession(Config const& config, std::optional<DeviceCounterTarget> target)
-        : m_impl{std::make_unique<Impl>()}
     {
         std::vector<MetricRequest> requests;
         std::vector<bool> eligible;
@@ -232,7 +186,7 @@ namespace alpakaMetrics::papi
             }
             if(request.name == "elapsed_time")
                 continue;
-            m_impl->results.push_back(
+            m_results.push_back(
                 makeUnavailable(request, MetricStatus::unsupported, "No semantic mapping for this metric"));
             requests.push_back(request);
             mapped.push_back(request.name != request.nativeName);
@@ -241,13 +195,13 @@ namespace alpakaMetrics::papi
             {
                 if(config.counterScope == MetricScope::callingThread)
                 {
-                    auto& result = m_impl->results.back();
+                    auto& result = m_results.back();
                     result.status = MetricStatus::unsupportedScope;
                     result.diagnostic = "Device queues cannot collect calling-thread counters";
                     accepted = false;
                 }
                 else
-                    accepted = bindDeviceRequest(requests.back(), *target, m_impl->results.back());
+                    accepted = bindDeviceRequest(requests.back(), *target, m_results.back());
             }
             eligible.push_back(accepted);
         }
@@ -258,7 +212,7 @@ namespace alpakaMetrics::papi
         for(std::size_t index = 0u; index < requests.size(); ++index)
         {
             auto const& request = requests[index];
-            auto& result = m_impl->results[index];
+            auto& result = m_results[index];
             if(!eligible[index])
                 continue;
             if(initialized != PAPI_OK)
@@ -270,7 +224,7 @@ namespace alpakaMetrics::papi
             // lease also rejects nested regions on the same thread without relying
             // on recursive locking or invoking try_lock() on an owned mutex.
             if((request.nativeName.starts_with("cuda:::") || request.nativeName.starts_with("rocp_sdk:::"))
-               && !m_impl->deviceLease.acquire(deviceCounterGate()))
+               && !m_deviceLease.acquire(deviceCounterGate()))
             {
                 result.status = MetricStatus::conflicting;
                 result.diagnostic = "Another device counter region is active in this process";
@@ -311,7 +265,7 @@ namespace alpakaMetrics::papi
                && (std::string_view{componentInfo->name} == "cuda"
                    || std::string_view{componentInfo->name} == "rocp_sdk"))
             {
-                if(!m_impl->deviceLease.acquire(deviceCounterGate()))
+                if(!m_deviceLease.acquire(deviceCounterGate()))
                 {
                     result.status = MetricStatus::conflicting;
                     result.diagnostic = "Another device counter region is active in this process";
@@ -319,13 +273,13 @@ namespace alpakaMetrics::papi
                 }
             }
             auto group = std::find_if(
-                m_impl->groups.begin(),
-                m_impl->groups.end(),
+                m_groups.begin(),
+                m_groups.end(),
                 [component](auto const& candidate) { return candidate.component == component; });
-            if(group == m_impl->groups.end())
+            if(group == m_groups.end())
             {
-                m_impl->groups.push_back({component});
-                group = std::prev(m_impl->groups.end());
+                m_groups.push_back({component});
+                group = std::prev(m_groups.end());
                 group->error = PAPI_create_eventset(&group->eventSet);
                 if(group->error == PAPI_OK)
                     group->error = PAPI_assign_eventset_component(group->eventSet, component);
@@ -349,25 +303,22 @@ namespace alpakaMetrics::papi
     bool PapiSession::hasEvents() const
     {
         return std::any_of(
-            m_impl->groups.begin(),
-            m_impl->groups.end(),
+            m_groups.begin(),
+            m_groups.end(),
             [](auto const& group) { return !group.resultIndices.empty(); });
     }
 
     bool PapiSession::isRunning() const
     {
-        return std::any_of(
-            m_impl->groups.begin(),
-            m_impl->groups.end(),
-            [](auto const& group) { return group.running; });
+        return std::any_of(m_groups.begin(), m_groups.end(), [](auto const& group) { return group.running; });
     }
 
     PapiSession::~PapiSession()
     {
         // Event sets belong to the creating thread. Active host instrumentation is thread-affine.
-        if(m_impl->owner != std::this_thread::get_id())
+        if(m_owner != std::this_thread::get_id())
             return;
-        for(auto& group : m_impl->groups)
+        for(auto& group : m_groups)
         {
             if(group.eventSet == PAPI_NULL)
                 continue;
@@ -383,7 +334,7 @@ namespace alpakaMetrics::papi
 
     void PapiSession::begin()
     {
-        for(auto& group : m_impl->groups)
+        for(auto& group : m_groups)
         {
             if(group.resultIndices.empty())
                 continue;
@@ -391,14 +342,14 @@ namespace alpakaMetrics::papi
             group.running = error == PAPI_OK;
             if(!group.running)
                 for(auto index : group.resultIndices)
-                    setFailure(m_impl->results[index], error);
+                    setFailure(m_results[index], error);
         }
     }
 
     std::vector<MetricResult> PapiSession::end()
     {
         static_assert(sizeof(long long) == sizeof(std::int64_t));
-        for(auto& group : m_impl->groups)
+        for(auto& group : m_groups)
         {
             if(!group.running)
                 continue;
@@ -407,7 +358,7 @@ namespace alpakaMetrics::papi
             group.running = false;
             for(std::size_t i = 0u; i < values.size(); ++i)
             {
-                auto& result = m_impl->results[group.resultIndices[i]];
+                auto& result = m_results[group.resultIndices[i]];
                 if(error != PAPI_OK)
                     setFailure(result, error);
                 else if(group.dataTypes[i] == PAPI_DATATYPE_FP64)
@@ -430,7 +381,7 @@ namespace alpakaMetrics::papi
                 }
             }
         }
-        return m_impl->results;
+        return m_results;
     }
 
     std::vector<MetricDescriptor> PapiSession::getAvailableMetrics()

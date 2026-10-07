@@ -43,33 +43,23 @@ set_target_properties(
     PROPERTIES INTERFACE_LINK_LIBRARIES alpaka::alpaka
 )
 
-add_library(
-    alpakaMetrics
-    SHARED
-    src/HostSideInstrumentation.cpp
-    src/Collector.cpp
-    src/Json.cpp
-    src/Session.cpp
-    src/Roofline.cpp
-)
+add_library(alpakaMetrics INTERFACE)
 add_library(alpakaMetrics::alpakaMetrics ALIAS alpakaMetrics)
-target_compile_features(alpakaMetrics PUBLIC cxx_std_20)
+target_compile_features(alpakaMetrics INTERFACE cxx_std_20)
 target_include_directories(
     alpakaMetrics
-    PUBLIC
+    INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 target_link_libraries(
     alpakaMetrics
-    PUBLIC alpakaMetrics::alpakaDependency Threads::Threads
-    PRIVATE ${CMAKE_DL_LIBS}
+    INTERFACE alpakaMetrics::alpakaDependency Threads::Threads ${CMAKE_DL_LIBS}
 )
-set_target_properties(alpakaMetrics PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
-if(UNIX)
-    set_target_properties(alpakaMetrics PROPERTIES INSTALL_RPATH "$ORIGIN")
-endif()
-alpaka_finalize(alpakaMetrics)
+target_compile_definitions(
+    alpakaMetrics
+    INTERFACE ALPAKA_METRICS_INSTALL_LIBDIR="${CMAKE_INSTALL_LIBDIR}"
+)
 
 if(alpakaMetrics_DEP_PAPI)
     include(cmake/Papi.cmake)
