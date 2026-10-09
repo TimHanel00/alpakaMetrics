@@ -23,6 +23,7 @@ namespace alpakaMetrics
         std::string version;
         std::string path;
         bool requiresDeviceSynchronization{};
+        bool asynchronous{};
     };
 
     /** Empty path uses the environment override or the default collector search.
@@ -48,7 +49,8 @@ namespace alpakaMetrics::internal::collector
 
     struct Module
     {
-        plugin::Collector const& api;
+        plugin::Collector const* api;
+        plugin::AsyncCollector const* asyncApi;
         CollectorInfo info;
     };
 
@@ -103,25 +105,38 @@ namespace alpakaMetrics::internal::collector
             throw CollectorUnavailable{"Cannot load collector " + path + ": " + dlerror()};
         auto entry = reinterpret_cast<plugin::Entry>(dlsym(handle.get(), "alpakaMetrics_getCollector"));
         auto const* api = entry ? entry() : nullptr;
-        if(!api || api->abiVersion != plugin::collectorAbiVersion || api->structSize < sizeof(plugin::Collector)
-           || !api->name || !api->version || !api->create || !api->destroy || !api->begin || !api->hasEvents
-           || !api->isRunning || !api->end || !api->discover)
+        auto asyncEntry = reinterpret_cast<plugin::AsyncEntry>(dlsym(handle.get(), "alpakaMetrics_getAsyncCollector"));
+        auto const* asyncApi = asyncEntry ? asyncEntry() : nullptr;
+        if((!api && !asyncApi)
+           || (api
+               && (api->abiVersion != plugin::collectorAbiVersion || api->structSize < sizeof(plugin::Collector)
+                   || !api->name || !api->version || !api->create || !api->destroy || !api->begin || !api->hasEvents
+                   || !api->isRunning || !api->end || !api->discover))
+           || (asyncApi
+               && (asyncApi->abiVersion != plugin::asyncCollectorAbiVersion
+                   || asyncApi->structSize < sizeof(plugin::AsyncCollector) || !asyncApi->name || !asyncApi->version
+                   || !asyncApi->create || !asyncApi->destroy || !asyncApi->begin || !asyncApi->submitted
+                   || !asyncApi->poll || !asyncApi->discover)))
         {
             throw std::runtime_error{"Incompatible collector ABI: " + path};
         }
         Dl_info loaded{};
-        auto const resolved = dladdr(api, &loaded) && loaded.dli_fname
+        auto const resolved = dladdr(asyncApi ? static_cast<void const*>(asyncApi) : api, &loaded) && loaded.dli_fname
                                   ? std::filesystem::absolute(loaded.dli_fname).lexically_normal().string()
                                   : path;
         auto const it = modules
                             .emplace(
                                 path,
                                 Module{
-                                    *api,
-                                    {api->name,
-                                     api->version,
+                                    api,
+                                    asyncApi,
+                                    {asyncApi ? asyncApi->name : api->name,
+                                     asyncApi ? asyncApi->version : api->version,
                                      resolved,
-                                     (api->capabilities & plugin::requiresDeviceSynchronization) != 0}})
+                                     ((asyncApi ? asyncApi->capabilities : api->capabilities)
+                                      & plugin::requiresDeviceSynchronization)
+                                         != 0,
+                                     asyncApi != nullptr}})
                             .first;
         // Keep loaded modules resident for process-global state and thread-local teardown.
         static_cast<void>(handle.release());
@@ -201,7 +216,10 @@ namespace alpakaMetrics
     {
         auto const& collectorModule = internal::collector::loadModule(path);
         internal::collector::Receiver receiver{{}, {}, collectorModule.info};
-        collectorModule.api.discover(internal::collector::Receiver::emit, &receiver);
+        if(collectorModule.asyncApi)
+            collectorModule.asyncApi->discover(internal::collector::Receiver::emit, &receiver);
+        else
+            collectorModule.api->discover(internal::collector::Receiver::emit, &receiver);
         if(receiver.failure)
             std::rethrow_exception(receiver.failure);
         std::vector<MetricDescriptor> descriptors;

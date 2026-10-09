@@ -78,6 +78,13 @@ provider scope, native event and unit, conversion, collector identity/version/pa
 and synchronization/replay flags. Unavailable metrics have a status and diagnostic
 instead of a fabricated value.
 
+Collector capabilities select the collection path automatically; applications
+request metrics through the same `Config`, handles and callbacks. Asynchronous
+collector results become ready after execution and metric delivery both finish.
+The optional asynchronous plugin interface supports host, CUDA and HIP kernels
+on timing-enabled queues; PAPI retains its existing synchronous counter path.
+No native asynchronous hardware collector is bundled yet.
+
 PAPI CPU presets and explicit native mappings are collected by the plugin.
 **PAPI GPU counters require `Config::allowSynchronization = true`** and retain
 context/device scope. Timing and result streaming remain asynchronous on

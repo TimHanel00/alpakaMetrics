@@ -55,7 +55,20 @@ namespace alpakaMetrics::internal
         try
         {
             m_module.emplace(collector::loadModule(config.collectorPlugin));
-            if(target && !config.allowSynchronization && m_module->info.requiresDeviceSynchronization)
+            if(!m_module->api)
+            {
+                for(auto& result : m_results)
+                {
+                    result.status = MetricStatus::unsupportedScope;
+                    result.diagnostic = "Asynchronous collector requires a tracked queue operation";
+                }
+                return;
+            }
+            // Dual-interface modules may use a different identity/capability set for legacy regions.
+            m_module->info.name = m_module->api->name;
+            m_module->info.version = m_module->api->version;
+            if(target && !config.allowSynchronization
+               && (m_module->api->capabilities & plugin::requiresDeviceSynchronization) != 0)
             {
                 for(auto& result : m_results)
                 {
@@ -69,7 +82,7 @@ namespace alpakaMetrics::internal
                 static_cast<std::uint32_t>(config.counterScope),
                 api.c_str(),
                 target ? target->device : 0};
-            m_session = m_module->api.create(requests.data(), requests.size(), &options);
+            m_session = m_module->api->create(requests.data(), requests.size(), &options);
             if(!m_session)
                 throw std::runtime_error{"Collector session creation failed"};
         }
@@ -90,23 +103,23 @@ namespace alpakaMetrics::internal
     inline Counters::~Counters()
     {
         if(m_session)
-            m_module->api.destroy(m_session);
+            m_module->api->destroy(m_session);
     }
 
     inline void Counters::begin()
     {
         if(m_session)
-            m_module->api.begin(m_session);
+            m_module->api->begin(m_session);
     }
 
     inline bool Counters::hasEvents() const
     {
-        return m_session && m_module->api.hasEvents(m_session);
+        return m_session && m_module->api->hasEvents(m_session);
     }
 
     inline bool Counters::isRunning() const
     {
-        return m_session && m_module->api.isRunning(m_session);
+        return m_session && m_module->api->isRunning(m_session);
     }
 
     inline std::vector<MetricResult> Counters::end()
@@ -114,7 +127,7 @@ namespace alpakaMetrics::internal
         if(m_session)
         {
             collector::Receiver receiver{{}, {}, m_module->info};
-            m_module->api.end(m_session, collector::Receiver::emit, &receiver);
+            m_module->api->end(m_session, collector::Receiver::emit, &receiver);
             if(receiver.failure)
                 for(auto& result : m_results)
                     result.diagnostic = "Invalid collector result";
