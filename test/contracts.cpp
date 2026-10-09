@@ -85,6 +85,13 @@ namespace
     void testMetricMappings()
     {
         using namespace alpakaMetrics;
+        auto duration = [](MetricUnit unit)
+        { return metric::map(metric::deviceExecutionTime, metric::native("cupti.kernel_duration", unit)); };
+        internal::validateConfig(Config{.metrics = {duration(MetricUnit::seconds)}});
+        expectThrow<std::invalid_argument>(
+            [&] { internal::validateConfig(Config{.metrics = {duration(MetricUnit::count)}}); });
+        expectThrow<std::invalid_argument>(
+            [&] { internal::validateConfig(Config{.metrics = {duration(MetricUnit::providerDefined)}}); });
         auto mapped = [](MetricUnit unit, double scale)
         { return metric::map(metric::energy, metric::native("invalid_energy_event", unit, scale)); };
         expectThrow<std::invalid_argument>(

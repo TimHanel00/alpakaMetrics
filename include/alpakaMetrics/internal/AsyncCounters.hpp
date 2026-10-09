@@ -66,6 +66,15 @@ namespace alpakaMetrics::internal
         AsyncCounters(AsyncCounters const&) = delete;
         AsyncCounters& operator=(AsyncCounters const&) = delete;
 
+        bool collects(std::string_view name)
+        {
+            std::lock_guard lock{m_mutex};
+            return std::any_of(
+                m_results.begin(),
+                m_results.end(),
+                [&](auto const& result) { return result.descriptor.name == name; });
+        }
+
         bool requiresSynchronization() const
         {
             return m_session && m_module.info.requiresDeviceSynchronization;
@@ -233,26 +242,56 @@ namespace alpakaMetrics::internal
         std::uint64_t id,
         std::string_view api,
         std::uint32_t device,
-        std::uintptr_t nativeQueue)
+        std::uintptr_t nativeQueue,
+        bool preferApiSpecific = true)
     {
         if(std::none_of(
                config.metrics.begin(),
                config.metrics.end(),
                [](auto const& request) { return request.name != "elapsed_time"; }))
             return {};
-        std::optional<collector::Module> collectorModule;
+        std::optional<collector::OperationModule> collectorModule;
+        auto collectionConfig = config;
         try
         {
-            collectorModule.emplace(collector::loadModule(config.collectorPlugin));
+            bool const preferNative = preferApiSpecific
+                                      && std::any_of(
+                                          config.metrics.begin(),
+                                          config.metrics.end(),
+                                          [](auto const& request)
+                                          {
+                                              return request.name == "device_execution_time"
+                                                     || request.getNativeName().starts_with("cupti.")
+                                                     || request.getNativeName().starts_with("rocprofiler.");
+                                          });
+            collectorModule.emplace(
+                collector::loadOperationModule(
+                    config.collectorPlugin,
+                    api,
+                    preferNative,
+                    config.defaultCollectorPlugin));
+            if(collectorModule->nativeSelected)
+                std::erase_if(
+                    collectionConfig.metrics,
+                    [](auto const& request)
+                    {
+                        return request.name != "device_execution_time"
+                               && !request.getNativeName().starts_with("cupti.")
+                               && !request.getNativeName().starts_with("rocprofiler.");
+                    });
         }
         catch(std::exception const&)
         {
             return {}; // Legacy path preserves selection/load diagnostics.
         }
-        if(!collectorModule->asyncApi)
+        if(!collectorModule->module.asyncApi)
             return {};
         std::string apiName{api};
         plugin::Options options{static_cast<std::uint32_t>(config.counterScope), apiName.c_str(), device};
-        return std::make_shared<AsyncCounters>(*collectorModule, config, options, plugin::Operation{id, nativeQueue});
+        return std::make_shared<AsyncCounters>(
+            collectorModule->module,
+            collectionConfig,
+            options,
+            plugin::Operation{id, nativeQueue});
     }
 } // namespace alpakaMetrics::internal

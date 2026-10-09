@@ -54,7 +54,7 @@ namespace alpakaMetrics::internal::collector
         CollectorInfo info;
     };
 
-    inline std::string pluginPath(std::string const& requested)
+    inline std::string pluginPath(std::string const& requested, char const* defaultName)
     {
         if(!requested.empty())
             return std::filesystem::absolute(requested).lexically_normal().string();
@@ -66,7 +66,7 @@ namespace alpakaMetrics::internal::collector
         if(dladdr(&moduleAnchor, &info) && info.dli_fname)
         {
             auto const directory = std::filesystem::absolute(info.dli_fname).parent_path();
-            constexpr auto name = "libalpakaMetrics_papi.so";
+            auto const* name = defaultName;
             for(auto const& candidate :
                 {directory / name, directory.parent_path() / name, directory.parent_path() / installLibDir / name})
                 if(std::filesystem::exists(candidate))
@@ -88,9 +88,9 @@ namespace alpakaMetrics::internal::collector
     };
 #endif
 
-    inline Module const& loadModule(std::string const& requested)
+    inline Module const& loadModule(std::string const& requested, char const* defaultName = "libalpakaMetrics_papi.so")
     {
-        auto const selected = pluginPath(requested);
+        auto const selected = pluginPath(requested, defaultName);
         auto const path = std::filesystem::path{selected}.has_parent_path()
                               ? std::filesystem::absolute(selected).lexically_normal().string()
                               : selected;
@@ -144,6 +144,60 @@ namespace alpakaMetrics::internal::collector
 #else
         throw CollectorUnavailable{"Runtime collector loading is unavailable on this platform"};
 #endif
+    }
+
+    inline bool hasEnvironmentSelection(char const* name)
+    {
+        auto const* value = std::getenv(name);
+        return value && *value;
+    }
+
+    inline Module const& loadConfiguredModule(std::string const& requested, std::string const& fallback = {})
+    {
+        if(!requested.empty() || hasEnvironmentSelection("ALPAKA_METRICS_COLLECTOR_PLUGIN"))
+            return loadModule(requested);
+        if(!fallback.empty())
+            return loadModule(fallback);
+        if(hasEnvironmentSelection("ALPAKA_METRICS_DEFAULT_COLLECTOR_PLUGIN"))
+            return loadModule(std::getenv("ALPAKA_METRICS_DEFAULT_COLLECTOR_PLUGIN"));
+        return loadModule({});
+    }
+
+    struct OperationModule
+    {
+        Module module;
+        bool nativeSelected{};
+    };
+
+    inline OperationModule loadOperationModule(
+        std::string const& requested,
+        std::string_view api,
+        bool preferNative,
+        std::string const& fallback = {})
+    {
+        // Explicit selection wins. Native providers require their corresponding alpaka backend.
+        if(preferNative && requested.empty() && !hasEnvironmentSelection("ALPAKA_METRICS_COLLECTOR_PLUGIN"))
+        {
+            char const* name = nullptr;
+#if ALPAKA_METRICS_HAS_CUPTI
+            if(api == "cuda")
+                name = "libalpakaMetrics_cupti.so";
+#endif
+#if ALPAKA_METRICS_HAS_ROCPROFILER
+            if(api == "hip")
+                name = "libalpakaMetrics_rocprofiler.so";
+#endif
+            if(name)
+                try
+                {
+                    return {loadModule({}, name), true};
+                }
+                catch(CollectorUnavailable const&)
+                {
+                    // Missing optional modules retain the configurable fallback.
+                }
+        }
+        return {loadConfiguredModule(requested, fallback), false};
     }
 
     struct Receiver
@@ -209,12 +263,12 @@ namespace alpakaMetrics
 {
     inline CollectorInfo getCollectorInfo(std::string const& path)
     {
-        return internal::collector::loadModule(path).info;
+        return internal::collector::loadConfiguredModule(path).info;
     }
 
     inline std::vector<MetricDescriptor> getAvailableMetrics(std::string const& path)
     {
-        auto const& collectorModule = internal::collector::loadModule(path);
+        auto const& collectorModule = internal::collector::loadConfiguredModule(path);
         internal::collector::Receiver receiver{{}, {}, collectorModule.info};
         if(collectorModule.asyncApi)
             collectorModule.asyncApi->discover(internal::collector::Receiver::emit, &receiver);
