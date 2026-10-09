@@ -264,3 +264,47 @@ add_test(
         $<TARGET_FILE:alpakaMetrics_badAsyncCollector>
 )
 set_tests_properties(alpakaMetrics.asyncCollectors PROPERTIES TIMEOUT 60)
+
+if(TARGET alpakaMetrics_cupti OR TARGET alpakaMetrics_rocprofiler)
+    add_executable(alpakaMetrics_nativeCollectors nativeCollectors.cpp)
+    target_link_libraries(
+        alpakaMetrics_nativeCollectors
+        PRIVATE alpakaMetrics::alpakaMetrics
+    )
+    target_compile_definitions(
+        alpakaMetrics_nativeCollectors
+        PRIVATE ALPAKA_METRICS_TEST_PAPI=$<BOOL:${alpakaMetrics_DEP_PAPI}>
+    )
+    add_dependencies(
+        alpakaMetrics_nativeCollectors
+        alpakaMetrics_asyncCollector
+    )
+    alpaka_finalize(alpakaMetrics_nativeCollectors)
+    foreach(_provider cupti rocprofiler)
+        if(TARGET alpakaMetrics_${_provider})
+            add_dependencies(
+                alpakaMetrics_nativeCollectors
+                alpakaMetrics_${_provider}
+            )
+            add_test(
+                NAME alpakaMetrics.${_provider}
+                COMMAND
+                    alpakaMetrics_nativeCollectors
+                    $<TARGET_FILE:alpakaMetrics_${_provider}>
+                    $<TARGET_FILE:alpakaMetrics_asyncCollector>
+            )
+            set_tests_properties(
+                alpakaMetrics.${_provider}
+                PROPERTIES TIMEOUT 90 SKIP_RETURN_CODE 77
+            )
+        endif()
+    endforeach()
+    if(TARGET alpakaMetrics_rocprofiler)
+        set_tests_properties(
+            alpakaMetrics.rocprofiler
+            PROPERTIES
+                ENVIRONMENT
+                    "LD_PRELOAD=$<TARGET_FILE:alpakaMetrics_rocprofiler>"
+        )
+    endif()
+endif()

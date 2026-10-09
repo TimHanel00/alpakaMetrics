@@ -5,6 +5,7 @@
 #include <future>
 #include <iostream>
 #include <limits>
+#include <optional>
 
 namespace
 {
@@ -12,6 +13,75 @@ namespace
     {
         if(!condition)
             throw std::runtime_error{message};
+    }
+
+    struct Environment
+    {
+        char const* name;
+        std::optional<std::string> previous;
+
+        explicit Environment(char const* name) : name{name}
+        {
+            if(auto const* value = std::getenv(name))
+                previous = value;
+            unsetenv(name);
+        }
+
+        ~Environment()
+        {
+            if(previous)
+                setenv(name, previous->c_str(), 1);
+            else
+                unsetenv(name);
+        }
+    };
+
+    void testFallback(std::string const& path, std::string const& badPath)
+    {
+        using namespace alpakaMetrics;
+        Environment explicitOverride{"ALPAKA_METRICS_COLLECTOR_PLUGIN"};
+        Environment defaultOverride{"ALPAKA_METRICS_DEFAULT_COLLECTOR_PLUGIN"};
+        Config config{.metrics = {metric::instructions}, .defaultCollectorPlugin = path};
+        HostSideInstrumentation region{config};
+        region.begin();
+        check(region.end().getMetric("instructions").descriptor.collector == "test", "Configured fallback ignored");
+        auto const fallback = internal::collector::loadOperationModule({}, "host", true, path);
+        check(!fallback.nativeSelected && fallback.module.info.name == "test", "Unavailable API did not fall back");
+#if !ALPAKA_METRICS_HAS_CUPTI
+        check(
+            internal::collector::loadOperationModule({}, "cuda", true, path).module.info.name == "test",
+            "Disabled CUPTI did not use the configured fallback");
+#endif
+#if !ALPAKA_METRICS_HAS_ROCPROFILER
+        check(
+            internal::collector::loadOperationModule({}, "hip", true, path).module.info.name == "test",
+            "Disabled ROCm provider did not use the configured fallback");
+#endif
+        setenv("ALPAKA_METRICS_DEFAULT_COLLECTOR_PLUGIN", path.c_str(), 1);
+        check(getCollectorInfo().name == "test", "Environment default ignored");
+        config.defaultCollectorPlugin = badPath;
+        HostSideInstrumentation invalid{config};
+        invalid.begin();
+        check(
+            invalid.end().getMetric("instructions").status == MetricStatus::collectionFailed,
+            "Invalid configured default silently selected another provider");
+        check(
+            internal::collector::loadConfiguredModule({}, path).info.name == "test",
+            "Configuration default did not override environment default");
+        setenv("ALPAKA_METRICS_COLLECTOR_PLUGIN", badPath.c_str(), 1);
+        bool rejected = false;
+        try
+        {
+            static_cast<void>(internal::collector::loadConfiguredModule({}, path));
+        }
+        catch(std::runtime_error const&)
+        {
+            rejected = true;
+        }
+        check(rejected, "Explicit environment override lost precedence over fallback");
+        check(
+            internal::collector::loadConfiguredModule(path, badPath).info.name == "test",
+            "Explicit configuration lost precedence over environment override");
     }
 
     void testPlugins(std::string const& path, std::string const& badPath)
@@ -92,6 +162,7 @@ int main(int argc, char** argv)
         }
         check(argc == 3, "Collector paths required");
         testPlugins(argv[1], argv[2]);
+        testFallback(argv[1], argv[2]);
         std::cout << "Plugin ABI and provenance checks passed\n";
     }
     catch(std::exception const& failure)

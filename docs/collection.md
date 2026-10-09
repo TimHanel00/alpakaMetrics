@@ -8,8 +8,8 @@
 | Host callback | Callback wall time | Queue worker thread |
 | CpuSerial kernel | Interval between queue markers | Queue worker thread |
 | Parallel CPU kernel | Interval between queue markers | `unsupportedScope` |
-| CUDA kernel | Alpaka timing-event interval | Optional synchronized PAPI collection; context scope |
-| HIP kernel | Alpaka timing-event interval | Optional synchronized PAPI sampling; device scope |
+| CUDA kernel | Alpaka timing-event interval | Optional correlated native duration; synchronized PAPI counters at context scope |
+| HIP kernel | Alpaka timing-event interval | Optional correlated native duration; synchronized PAPI counters at device scope |
 | SYCL kernel | Alpaka timing-event interval | `unsupportedScope` |
 
 Queue intervals exclude preceding queue delay but may include bookkeeping and

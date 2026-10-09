@@ -202,6 +202,21 @@ int main(int argc, char** argv)
         auto* collectorModule = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
         auto release = reinterpret_cast<Release>(dlsym(collectorModule, "alpakaMetrics_testRelease"));
         check(release != nullptr, "Fixture release entry point missing");
+        // A configurable asynchronous fallback must receive all requests, even with a native metric present.
+        Config fallback{
+            .metrics = {metric::deviceExecutionTime, metric::instructions},
+            .defaultCollectorPlugin = path};
+        auto const fallbackId = internal::nextMeasurementId();
+        auto fallbackCounters = internal::makeAsyncCounters(fallback, fallbackId, "host", 0, 0);
+        check(fallbackCounters != nullptr, "Asynchronous default provider ignored");
+        fallbackCounters->begin();
+        fallbackCounters->submitted();
+        release(fallbackId);
+        auto const fallbackResults = fallbackCounters->getResults();
+        check(
+            fallbackResults.size() == 2 && fallbackResults[0].isAvailable() && fallbackResults[1].isAvailable(),
+            "Asynchronous fallback lost requests to native-only routing");
+        fallbackCounters.reset();
         checkFailures(path, release);
         bool rejected = false;
         try
