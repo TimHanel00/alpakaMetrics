@@ -225,3 +225,42 @@ target_link_libraries(
 alpaka_finalize(alpakaMetrics_headerOnly)
 add_test(NAME alpakaMetrics.headerOnly COMMAND alpakaMetrics_headerOnly)
 set_tests_properties(alpakaMetrics.headerOnly PROPERTIES TIMEOUT 30)
+
+foreach(_collector asyncCollector syncAsyncCollector badAsyncCollector)
+    add_library(alpakaMetrics_${_collector} MODULE asyncCollectorPlugin.cpp)
+    target_compile_features(alpakaMetrics_${_collector} PRIVATE cxx_std_20)
+    target_include_directories(
+        alpakaMetrics_${_collector}
+        PRIVATE ${PROJECT_SOURCE_DIR}/include
+    )
+    target_link_libraries(alpakaMetrics_${_collector} PRIVATE Threads::Threads)
+endforeach()
+target_compile_definitions(
+    alpakaMetrics_syncAsyncCollector
+    PRIVATE ALPAKA_METRICS_SYNC_ASYNC=1
+)
+target_compile_definitions(
+    alpakaMetrics_badAsyncCollector
+    PRIVATE ALPAKA_METRICS_BAD_ASYNC_ABI=1
+)
+add_executable(alpakaMetrics_asyncCollectors asyncCollectors.cpp)
+target_link_libraries(
+    alpakaMetrics_asyncCollectors
+    PRIVATE alpakaMetrics::alpakaMetrics
+)
+alpaka_finalize(alpakaMetrics_asyncCollectors)
+add_dependencies(
+    alpakaMetrics_asyncCollectors
+    alpakaMetrics_asyncCollector
+    alpakaMetrics_syncAsyncCollector
+    alpakaMetrics_badAsyncCollector
+)
+add_test(
+    NAME alpakaMetrics.asyncCollectors
+    COMMAND
+        alpakaMetrics_asyncCollectors
+        $<TARGET_FILE:alpakaMetrics_asyncCollector>
+        $<TARGET_FILE:alpakaMetrics_syncAsyncCollector>
+        $<TARGET_FILE:alpakaMetrics_badAsyncCollector>
+)
+set_tests_properties(alpakaMetrics.asyncCollectors PROPERTIES TIMEOUT 60)
