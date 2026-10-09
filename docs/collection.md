@@ -17,6 +17,20 @@ idle gaps between markers. They are not kernel-exclusive durations. Device queue
 must enable timing. Submissions through the underlying queue bypass measurement.
 Kernels are launched once; no automatic replay or multiplexing is performed.
 
+Asynchronous collector plugins are selected automatically for kernels on
+timing-enabled host, CUDA and HIP queues. No collection policy is required.
+`isComplete()` and `tryGetResults()` account for both execution completion and
+collector delivery. Device/context-wide measurements retain their declared scope;
+asynchronous delivery does not imply kernel-exclusive attribution. PAPI and host
+regions retain their existing collection path. SYCL currently retains timing-only
+collection.
+
+The provider closes delivery explicitly. Omitted metrics become failed entries;
+invalid correlation, duplicate records or failed delivery invalidate its metrics.
+A provider that has not closed delivery within 30 seconds after execution completion
+is observed reports `collectionFailed`; timing remains available. This deadline
+bounds result delivery, including `Session::drain()`, without replaying work.
+
 `Measurement::getResults()` waits and caches a snapshot. `tryGetResults()` returns
 an empty optional if work is pending or another reader holds the result lock.
 Both propagate operation failures. Retained handles survive queue history clearing.

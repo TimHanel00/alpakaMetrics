@@ -54,3 +54,65 @@ See [the PAPI adapter](../plugins/papi/Plugin.cpp) for a concrete module.
 
 The completion service polls Alpaka events and publishes immutable snapshots.
 Collector sessions remain on their collection thread.
+
+## Asynchronous operation collection
+
+An asynchronous module exports an independent entry point, preserving the
+existing collector ABI:
+
+```cpp
+extern "C" alpakaMetrics::plugin::AsyncCollector const*
+alpakaMetrics_getAsyncCollector() noexcept;
+```
+
+A module may export either or both entry points. For tracked host, CUDA and HIP
+kernels on timing-enabled queues, the asynchronous interface takes precedence.
+Host regions and host tasks use the legacy interface. The asynchronous core is
+validated with a deterministic test module; no native asynchronous hardware
+collector is bundled yet.
+
+`AsyncCollector::create` receives requested metrics, device options, an
+`Operation` and an `AsyncSink`. Copy borrowed requests, strings, options and sink
+fields before returning; the operation ID and native queue identify the submission.
+`Options::deviceApi` is `host`, `cuda` or `hip`. `Operation::nativeQueue` is a host
+queue index or an encoded CUDA/HIP stream pointer. CUDA/HIP create and submission
+calls run with the queue device selected. Providers must retain any additional
+native context needed for later calls.
+
+The lifecycle is:
+
+1. `create`, `begin` and `submitted` run on the submitting thread. `begin` and
+   `submitted` bracket queue markers and exactly one kernel launch. `submitted`
+   also closes the bracket if submission throws; destruction then cancels delivery.
+2. After the execution event completes, the core calls `poll(session, true)`.
+   Calls are serialized per operation and may run on a result reader or the
+   session progress thread. Polling must return promptly and must not wait for
+   device work or record arrival; providers may request nonblocking flushes here.
+3. Provider threads may call `sink.emit(context, measurementId, metric)`.
+   The core copies the record immediately. Emit each requested metric at most
+   once with its actual units and attribution scope.
+4. Call `sink.complete(context, measurementId, success, diagnostic)` after all
+   records for that operation have been emitted. The diagnostic pointer must be
+   non-null. Success seals the result; omitted metrics remain failed entries.
+   Failure marks all requested collector metrics `collectionFailed`.
+5. `destroy` may run on any thread. It must cancel pending work and quiesce all
+   callbacks before returning, including when collection never began. It must
+   not wait for GPU execution or callbacks into application code. Providers must
+   release submission-thread correlation state in `submitted`.
+
+The sink supports concurrent provider callbacks. Completion must happen after
+all emit calls return; further records are ignored. Incorrect operation IDs,
+malformed records and duplicate or unrequested metrics fail collection.
+Callbacks only update core storage; user callbacks run through `Session`.
+
+Execution completion and record readiness are independent. Results wait for
+both; a stalled provider becomes failed after the core's 30-second delivery
+window following observed execution completion. Destruction still must quiesce
+callbacks promptly. Providers remain responsible for reporting dropped records
+and collection conflicts, and must not synchronize or replay secretly.
+
+`requiresDeviceSynchronization` is honored by both interfaces. Without
+`Config::allowSynchronization`, such an asynchronous provider reports
+`unsupportedScope`. With opt-in, queue execution is synchronized and the result
+records `synchronized`. An ordinary asynchronous provider adds neither per-launch
+waits nor replay.

@@ -5,6 +5,7 @@
 
 #include <alpakaMetrics/HostSideInstrumentation.hpp>
 #include <alpakaMetrics/Measurement.hpp>
+#include <alpakaMetrics/internal/AsyncCounters.hpp>
 #include <alpakaMetrics/internal/Counters.hpp>
 
 #include <exception>
@@ -185,38 +186,35 @@ namespace alpakaMetrics::internal
         return Measurement{std::move(state)};
     }
 
-    template<>
-    struct Enqueue::Op<alpaka::api::Host>
-    {
-        template<
-            concepts::Queue T_Queue,
-            alpaka::onHost::concepts::ThreadOrFrameSpec T_Spec,
-            alpaka::concepts::KernelBundle T_Bundle>
-        Measurement operator()(T_Queue const& queue, Config const& config, T_Spec const& spec, T_Bundle const& bundle)
-            const
-        {
-            constexpr bool serial = std::same_as<decltype(spec.getExecutor()), alpaka::exec::CpuSerial>;
-            return enqueueHost(queue, config, serial, [&] { queue.enqueue(spec, bundle); });
-        }
-    };
-
     template<concepts::Queue T_Queue, typename T_Launch>
     requires std::invocable<T_Launch const&>
     Measurement enqueueDevice(
         T_Queue const& queue,
         Config const& config,
         T_Launch launch,
-        std::optional<std::reference_wrapper<Counters>> counters = std::nullopt)
+        std::optional<std::reference_wrapper<Counters>> counters = std::nullopt,
+        std::shared_ptr<AsyncCounters> asyncCounters = {},
+        std::uint64_t id = nextMeasurementId())
     {
         if constexpr(std::same_as<decltype(queue.getTiming()), alpaka::timing::Enabled>)
         {
             auto start = queue.makeEvent();
             auto end = queue.makeEvent();
             auto state = std::make_shared<MeasurementState>();
-            state->id = nextMeasurementId();
+            state->id = id;
             bool synchronized = false;
+            bool asyncSubmitted = false;
             try
             {
+                if(asyncCounters)
+                {
+                    if(asyncCounters->requiresSynchronization())
+                    {
+                        alpaka::onHost::wait(queue);
+                        synchronized = true;
+                    }
+                    asyncCounters->begin();
+                }
                 if(counters && counters->get().hasEvents())
                 {
                     // Synchronous collector sets are thread-affine and may cover a context/device.
@@ -228,11 +226,18 @@ namespace alpakaMetrics::internal
                 queue.enqueue(start);
                 launch();
                 queue.enqueue(end);
+                if(asyncCounters)
+                {
+                    asyncCounters->submitted();
+                    asyncSubmitted = true;
+                }
                 if(synchronized)
                     alpaka::onHost::wait(end);
             }
             catch(...)
             {
+                if(asyncCounters && !asyncSubmitted)
+                    asyncCounters->submitted();
                 // A launch can fail after partially submitting work. Complete it before
                 // dismantling the profiling session, and preserve the original exception.
                 if(counters && counters->get().isRunning())
@@ -249,22 +254,30 @@ namespace alpakaMetrics::internal
                 throw;
             }
             std::vector<MetricResult> counterResults;
+            // Asynchronous delivery continues after submission; do not wait for records here.
             if(counters)
                 counterResults = counters->get().end();
-            else
+            else if(!asyncCounters)
                 for(auto const& request : config.metrics)
                     if(request.name != "elapsed_time")
                         counterResults.push_back(makeUnavailable(
                             request,
                             MetricStatus::unsupportedScope,
                             "This queue backend has no native counter provider"));
-            state->isComplete = [end] { return end.isComplete(); };
-            // Capture values, never a live collector session. Results can be read on any thread.
-            state->read
-                = [start, end, config, counterResults = std::move(counterResults), id = state->id, synchronized]
+            state->isComplete
+                = [end, asyncCounters] { return end.isComplete() && (!asyncCounters || asyncCounters->isComplete()); };
+            // Legacy sessions stay on the submitting thread; asynchronous sessions support any result reader.
+            state->read = [start,
+                           end,
+                           config,
+                           counterResults = std::move(counterResults),
+                           id = state->id,
+                           synchronized,
+                           asyncCounters]
             {
                 // Also wait for counter-only measurements on the asynchronous fallback path.
                 alpaka::onHost::wait(end);
+                auto const completedCounters = asyncCounters ? asyncCounters->getResults() : counterResults;
                 Result result;
                 result.measurementId = id;
                 result.label = config.label;
@@ -284,7 +297,7 @@ namespace alpakaMetrics::internal
                              alpaka::onHost::getElapsedTime(start, end).count(),
                              {}});
                     else
-                        result.metrics.push_back(counterResults.at(counterIndex++));
+                        result.metrics.push_back(completedCounters.at(counterIndex++));
                 }
                 return result;
             };
@@ -306,9 +319,47 @@ namespace alpakaMetrics::internal
         // device first. Do not call profiling APIs from a GPU host callback.
         queue.enqueueNativeFn([](auto) {});
         auto const device = alpaka::onHost::getNativeHandle(queue.getDevice());
+        auto const id = nextMeasurementId();
+        auto asyncCounters = makeAsyncCounters(
+            config,
+            id,
+            component,
+            static_cast<std::uint32_t>(device),
+            reinterpret_cast<std::uintptr_t>(queue.getNativeHandle()));
+        if(asyncCounters)
+            return enqueueDevice(queue, config, std::move(launch), std::nullopt, std::move(asyncCounters), id);
         Counters counters{config, DeviceCounterTarget{component, static_cast<std::uint32_t>(device)}};
         return enqueueDevice(queue, config, std::move(launch), std::ref(counters));
     }
+
+    template<>
+    struct Enqueue::Op<alpaka::api::Host>
+    {
+        template<
+            concepts::Queue T_Queue,
+            alpaka::onHost::concepts::ThreadOrFrameSpec T_Spec,
+            alpaka::concepts::KernelBundle T_Bundle>
+        Measurement operator()(T_Queue const& queue, Config const& config, T_Spec const& spec, T_Bundle const& bundle)
+            const
+        {
+            if constexpr(std::same_as<decltype(queue.getTiming()), alpaka::timing::Enabled>)
+            {
+                auto const id = nextMeasurementId();
+                auto asyncCounters
+                    = makeAsyncCounters(config, id, "host", 0u, static_cast<std::uintptr_t>(queue.getNativeHandle()));
+                if(asyncCounters)
+                    return enqueueDevice(
+                        queue,
+                        config,
+                        [&] { queue.enqueue(spec, bundle); },
+                        std::nullopt,
+                        std::move(asyncCounters),
+                        id);
+            }
+            constexpr bool serial = std::same_as<decltype(spec.getExecutor()), alpaka::exec::CpuSerial>;
+            return enqueueHost(queue, config, serial, [&] { queue.enqueue(spec, bundle); });
+        }
+    };
 
     /** Portable timing fallback for APIs without a native counter provider. */
     template<typename T_Api>
