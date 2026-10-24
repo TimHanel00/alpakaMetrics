@@ -32,7 +32,9 @@ namespace alpakaMetrics::internal
             if(!request.getNativeName().empty())
             {
                 auto expected = MetricUnit::count;
-                if(request.name == "energy")
+                if(request.name == "device_execution_time")
+                    expected = MetricUnit::seconds;
+                else if(request.name == "energy")
                     expected = MetricUnit::joules;
                 else if(request.name == "core_frequency")
                     expected = MetricUnit::hertz;

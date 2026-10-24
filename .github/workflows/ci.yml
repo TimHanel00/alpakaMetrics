@@ -99,8 +99,8 @@ jobs:
             ${{ matrix.config.compiler == 'gcc' && matrix.config.papi == 'ON' && '-DalpakaMetrics_PAPI_COMPONENTS=sde' || '' }} \
             ${{ matrix.config.cuda != 'no' && '-DalpakaMetrics_PAPI_COMPONENTS=cuda' || '' }} \
             ${{ matrix.config.hip != 'no' && '-DalpakaMetrics_PAPI_COMPONENTS=rocp_sdk' || '' }} \
-            ${{ matrix.config.cuda != 'no' && '-Dalpaka_DEP_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=75' || '' }} \
-            ${{ matrix.config.hip != 'no' && '-Dalpaka_DEP_HIP=ON -Dalpaka_DEP_OMP=OFF -DCMAKE_HIP_ARCHITECTURES=gfx906 -DAMDGPU_TARGETS=gfx906' || '' }}
+            ${{ matrix.config.cuda != 'no' && '-Dalpaka_DEP_CUDA=ON -DalpakaMetrics_DEP_CUPTI=ON -DCMAKE_CUDA_ARCHITECTURES=75' || '' }} \
+            ${{ matrix.config.hip != 'no' && '-Dalpaka_DEP_HIP=ON -DalpakaMetrics_DEP_ROCPROFILER=ON -Dalpaka_DEP_OMP=OFF -DCMAKE_HIP_ARCHITECTURES=gfx906 -DAMDGPU_TARGETS=gfx906' || '' }}
       - name: Build
         run: cmake --build build --parallel 2
       # Hosted runners have no GPU; accelerator jobs validate compilation only.

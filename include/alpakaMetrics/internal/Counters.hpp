@@ -54,7 +54,7 @@ namespace alpakaMetrics::internal
             return;
         try
         {
-            m_module.emplace(collector::loadModule(config.collectorPlugin));
+            m_module.emplace(collector::loadConfiguredModule(config.collectorPlugin, config.defaultCollectorPlugin));
             if(!m_module->api)
             {
                 for(auto& result : m_results)
@@ -89,7 +89,9 @@ namespace alpakaMetrics::internal
         catch(std::exception const& error)
         {
             bool const explicitlySelected
-                = !config.collectorPlugin.empty() || std::getenv("ALPAKA_METRICS_COLLECTOR_PLUGIN");
+                = !config.collectorPlugin.empty() || !config.defaultCollectorPlugin.empty()
+                  || collector::hasEnvironmentSelection("ALPAKA_METRICS_COLLECTOR_PLUGIN")
+                  || collector::hasEnvironmentSelection("ALPAKA_METRICS_DEFAULT_COLLECTOR_PLUGIN");
             for(auto& result : m_results)
             {
                 result.status = !explicitlySelected && dynamic_cast<collector::CollectorUnavailable const*>(&error)

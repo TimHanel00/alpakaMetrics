@@ -15,6 +15,11 @@ namespace alpakaMetrics
         {
         };
 
+        /** Device timestamps for one correlated kernel, excluding queue markers. */
+        struct DeviceExecutionTime
+        {
+        };
+
         struct Cycles
         {
         };
@@ -84,6 +89,7 @@ namespace alpakaMetrics
         };
 
         inline constexpr ElapsedTime elapsedTime{};
+        inline constexpr DeviceExecutionTime deviceExecutionTime{};
         inline constexpr Cycles cycles{};
         inline constexpr Instructions instructions{};
         inline constexpr FloatingPointOperations floatingPointOperations{};
@@ -131,6 +137,10 @@ namespace alpakaMetrics
         }
 
         MetricRequest(metric::ElapsedTime) : name{"elapsed_time"}
+        {
+        }
+
+        MetricRequest(metric::DeviceExecutionTime) : name{"device_execution_time"}, unit{MetricUnit::seconds}
         {
         }
 
@@ -234,5 +244,7 @@ namespace alpakaMetrics
         std::string collectorPlugin;
         /** Permit providers that must wait around device counter collection. */
         bool allowSynchronization{false};
+        /** Fallback module when no enabled API-specific provider handles the metric; empty defaults to PAPI. */
+        std::string defaultCollectorPlugin;
     };
 } // namespace alpakaMetrics
