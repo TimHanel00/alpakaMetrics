@@ -83,7 +83,9 @@ request metrics through the same `Config`, handles and callbacks. Asynchronous
 collector results become ready after execution and metric delivery both finish.
 The optional asynchronous plugin interface supports host, CUDA and HIP kernels
 on timing-enabled queues; PAPI retains its existing synchronous counter path.
-No native asynchronous hardware collector is bundled yet.
+Optional CUPTI and ROCprofiler-SDK plugins provide correlated GPU kernel execution
+time. PAPI remains independently available for CPU and GPU hardware counters; see
+[provider setup](docs/plugins.md#native-gpu-activity-providers).
 
 PAPI CPU presets and explicit native mappings are collected by the plugin.
 **PAPI GPU counters require `Config::allowSynchronization = true`** and retain
@@ -95,7 +97,10 @@ non-blocking queues.
 `HostSideInstrumentation` supplies calling-thread regions with `begin()`/`end()`.
 `metric::map()` binds semantic metrics to native counters and explicit conversions.
 Discovery is available through `getAvailableMetrics()` and `getCollectorInfo()`.
-Collectors can be selected with `Config::collectorPlugin` or
+The fallback provider defaults to PAPI and can be changed with
+`Config::defaultCollectorPlugin` or `ALPAKA_METRICS_DEFAULT_COLLECTOR_PLUGIN`.
+Enabled native providers still take precedence for their activity metrics.
+Collectors can be explicitly selected with `Config::collectorPlugin` or
 `ALPAKA_METRICS_COLLECTOR_PLUGIN`. The default search checks beside the application,
 its parent directory, the installation library directory relative to that parent,
 and the platform library search paths.

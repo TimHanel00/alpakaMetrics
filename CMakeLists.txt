@@ -34,6 +34,21 @@ if(NOT TARGET alpaka::alpaka)
     FetchContent_MakeAvailable(alpaka3)
 endif()
 find_package(Threads REQUIRED)
+include(CMakeDependentOption)
+cmake_dependent_option(
+    alpakaMetrics_DEP_CUPTI
+    "Build direct CUPTI activity collector"
+    OFF
+    "alpaka_DEP_CUDA"
+    OFF
+)
+cmake_dependent_option(
+    alpakaMetrics_DEP_ROCPROFILER
+    "Build direct ROCprofiler-SDK activity collector"
+    OFF
+    "alpaka_DEP_HIP"
+    OFF
+)
 
 # An imported forwarding target keeps Alpaka's recursive finalize discovery working
 # without exporting the FetchContent dependency's non-exported build targets.
@@ -81,6 +96,50 @@ if(alpakaMetrics_DEP_PAPI)
     set_target_properties(alpakaMetrics_papi PROPERTIES INSTALL_RPATH "$ORIGIN")
     install(
         TARGETS alpakaMetrics_papi
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    )
+endif()
+
+if(alpakaMetrics_DEP_CUPTI)
+    find_package(CUDAToolkit 12.0 REQUIRED)
+    add_library(alpakaMetrics_cupti MODULE plugins/cupti/Collector.cpp)
+    target_compile_features(alpakaMetrics_cupti PRIVATE cxx_std_20)
+    target_include_directories(alpakaMetrics_cupti PRIVATE include plugins)
+    target_link_libraries(
+        alpakaMetrics_cupti
+        PRIVATE CUDA::cupti CUDA::cuda_driver Threads::Threads
+    )
+    target_compile_definitions(
+        alpakaMetrics
+        INTERFACE ALPAKA_METRICS_HAS_CUPTI=1
+    )
+    install(
+        TARGETS alpakaMetrics_cupti
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    )
+endif()
+if(alpakaMetrics_DEP_ROCPROFILER)
+    find_package(rocprofiler-sdk CONFIG REQUIRED)
+    add_library(
+        alpakaMetrics_rocprofiler
+        MODULE
+        plugins/rocprofiler/Collector.cpp
+    )
+    target_compile_features(alpakaMetrics_rocprofiler PRIVATE cxx_std_20)
+    target_include_directories(
+        alpakaMetrics_rocprofiler
+        PRIVATE include plugins
+    )
+    target_link_libraries(
+        alpakaMetrics_rocprofiler
+        PRIVATE rocprofiler-sdk::rocprofiler-sdk Threads::Threads
+    )
+    target_compile_definitions(
+        alpakaMetrics
+        INTERFACE ALPAKA_METRICS_HAS_ROCPROFILER=1
+    )
+    install(
+        TARGETS alpakaMetrics_rocprofiler
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     )
 endif()

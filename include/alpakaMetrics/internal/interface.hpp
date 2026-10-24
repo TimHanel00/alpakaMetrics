@@ -194,7 +194,8 @@ namespace alpakaMetrics::internal
         T_Launch launch,
         std::optional<std::reference_wrapper<Counters>> counters = std::nullopt,
         std::shared_ptr<AsyncCounters> asyncCounters = {},
-        std::uint64_t id = nextMeasurementId())
+        std::uint64_t id = nextMeasurementId(),
+        std::shared_ptr<AsyncCounters> fallbackCounters = {})
     {
         if constexpr(std::same_as<decltype(queue.getTiming()), alpaka::timing::Enabled>)
         {
@@ -206,14 +207,16 @@ namespace alpakaMetrics::internal
             bool asyncSubmitted = false;
             try
             {
-                if(asyncCounters)
+                for(auto* collector : {asyncCounters.get(), fallbackCounters.get()})
                 {
-                    if(asyncCounters->requiresSynchronization())
+                    if(!collector)
+                        continue;
+                    if(collector->requiresSynchronization())
                     {
                         alpaka::onHost::wait(queue);
                         synchronized = true;
                     }
-                    asyncCounters->begin();
+                    collector->begin();
                 }
                 if(counters && counters->get().hasEvents())
                 {
@@ -221,23 +224,24 @@ namespace alpakaMetrics::internal
                     // Finish preceding queue work before opening the counter interval.
                     alpaka::onHost::wait(queue);
                     counters->get().begin();
-                    synchronized = counters->get().isRunning();
+                    synchronized = synchronized || counters->get().isRunning();
                 }
                 queue.enqueue(start);
                 launch();
                 queue.enqueue(end);
-                if(asyncCounters)
-                {
-                    asyncCounters->submitted();
-                    asyncSubmitted = true;
-                }
+                for(auto* collector : {fallbackCounters.get(), asyncCounters.get()})
+                    if(collector)
+                        collector->submitted();
+                asyncSubmitted = true;
                 if(synchronized)
                     alpaka::onHost::wait(end);
             }
             catch(...)
             {
-                if(asyncCounters && !asyncSubmitted)
-                    asyncCounters->submitted();
+                if(!asyncSubmitted)
+                    for(auto* collector : {fallbackCounters.get(), asyncCounters.get()})
+                        if(collector)
+                            collector->submitted();
                 // A launch can fail after partially submitting work. Complete it before
                 // dismantling the profiling session, and preserve the original exception.
                 if(counters && counters->get().isRunning())
@@ -264,8 +268,16 @@ namespace alpakaMetrics::internal
                             request,
                             MetricStatus::unsupportedScope,
                             "This queue backend has no native counter provider"));
-            state->isComplete
-                = [end, asyncCounters] { return end.isComplete() && (!asyncCounters || asyncCounters->isComplete()); };
+            state->isComplete = [end, asyncCounters, fallbackCounters]
+            {
+                if(!end.isComplete())
+                    return false;
+                bool complete = true;
+                for(auto* collector : {asyncCounters.get(), fallbackCounters.get()})
+                    if(collector)
+                        complete = collector->isComplete() && complete;
+                return complete;
+            };
             // Legacy sessions stay on the submitting thread; asynchronous sessions support any result reader.
             state->read = [start,
                            end,
@@ -273,16 +285,25 @@ namespace alpakaMetrics::internal
                            counterResults = std::move(counterResults),
                            id = state->id,
                            synchronized,
-                           asyncCounters]
+                           asyncCounters,
+                           fallbackCounters]
             {
                 // Also wait for counter-only measurements on the asynchronous fallback path.
                 alpaka::onHost::wait(end);
-                auto const completedCounters = asyncCounters ? asyncCounters->getResults() : counterResults;
+                auto completedCounters = counterResults;
+                for(auto* collector : {asyncCounters.get(), fallbackCounters.get()})
+                    if(collector)
+                    {
+                        auto activityResults = collector->getResults();
+                        completedCounters.insert(
+                            completedCounters.end(),
+                            activityResults.begin(),
+                            activityResults.end());
+                    }
                 Result result;
                 result.measurementId = id;
                 result.label = config.label;
                 result.synchronized = synchronized;
-                std::size_t counterIndex = 0u;
                 for(auto const& request : config.metrics)
                 {
                     if(request.name == "elapsed_time")
@@ -297,7 +318,18 @@ namespace alpakaMetrics::internal
                              alpaka::onHost::getElapsedTime(start, end).count(),
                              {}});
                     else
-                        result.metrics.push_back(completedCounters.at(counterIndex++));
+                    {
+                        auto const found = std::find_if(
+                            completedCounters.begin(),
+                            completedCounters.end(),
+                            [&](auto const& metric) { return metric.descriptor.name == request.name; });
+                        result.metrics.push_back(
+                            found != completedCounters.end() ? *found
+                                                             : makeUnavailable(
+                                                                   request,
+                                                                   MetricStatus::collectionFailed,
+                                                                   "Collector did not return this metric"));
+                    }
                 }
                 return result;
             };
@@ -326,10 +358,32 @@ namespace alpakaMetrics::internal
             component,
             static_cast<std::uint32_t>(device),
             reinterpret_cast<std::uintptr_t>(queue.getNativeHandle()));
+        auto counterConfig = config;
         if(asyncCounters)
-            return enqueueDevice(queue, config, std::move(launch), std::nullopt, std::move(asyncCounters), id);
-        Counters counters{config, DeviceCounterTarget{component, static_cast<std::uint32_t>(device)}};
-        return enqueueDevice(queue, config, std::move(launch), std::ref(counters));
+            std::erase_if(
+                counterConfig.metrics,
+                [&](auto const& request) { return asyncCounters->collects(request.name); });
+        auto fallbackCounters = asyncCounters ? makeAsyncCounters(
+                                                    counterConfig,
+                                                    id,
+                                                    component,
+                                                    static_cast<std::uint32_t>(device),
+                                                    reinterpret_cast<std::uintptr_t>(queue.getNativeHandle()),
+                                                    false)
+                                              : nullptr;
+        if(fallbackCounters)
+            std::erase_if(
+                counterConfig.metrics,
+                [&](auto const& request) { return fallbackCounters->collects(request.name); });
+        Counters counters{counterConfig, DeviceCounterTarget{component, static_cast<std::uint32_t>(device)}};
+        return enqueueDevice(
+            queue,
+            config,
+            std::move(launch),
+            std::ref(counters),
+            std::move(asyncCounters),
+            id,
+            std::move(fallbackCounters));
     }
 
     template<>
